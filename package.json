@@ -1,10 +1,10 @@
 {
   "name": "litigaforge-blog",
   "version": "1.0.0",
-  "description": "LitigaForge AI Legal Blog — auto-published content",
+  "description": "LitigaForge AI Legal Blog \u2014 auto-published content",
   "scripts": {
-    "dev":     "astro dev",
-    "build":   "rm -rf node_modules/@astrojs/sitemap && astro build",
+    "dev": "astro dev",
+    "build": "astro build",
     "preview": "astro preview"
   },
   "dependencies": {
