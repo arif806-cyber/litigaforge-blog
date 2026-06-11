@@ -1,0 +1,138 @@
+---
+// src/pages/blog/[slug].astro
+// Individual article page — litigaforge.com/blog/{slug}
+
+import { getCollection, getEntry } from 'astro:content';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('blog');
+  return posts.map(post => ({
+    params: { slug: post.slug },
+    props:  { post }
+  }));
+}
+
+const { post } = Astro.props;
+const { Content } = await post.render();
+
+// Build FAQ schema for Google rich results
+const faqSchema = {
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": (post.data.faq || []).map(f => ({
+    "@type": "Question",
+    "name": f.q,
+    "acceptedAnswer": { "@type": "Answer", "text": f.a }
+  }))
+};
+
+const articleSchema = {
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": post.data.title,
+  "description": post.data.description,
+  "datePublished": post.data.date,
+  "author": { "@type": "Organization", "name": "LitigaForge AI", "url": "https://litigaforge.com" },
+  "publisher": { "@type": "Organization", "name": "LitigaForge AI", "logo": { "@type": "ImageObject", "url": "https://litigaforge.com/logo.png" } }
+};
+---
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{post.data.title} | LitigaForge AI</title>
+  <meta name="description" content={post.data.description} />
+  <link rel="canonical" href={`https://litigaforge.com/blog/${post.slug}`} />
+
+  <!-- Open Graph -->
+  <meta property="og:title"       content={post.data.title} />
+  <meta property="og:description" content={post.data.description} />
+  <meta property="og:type"        content="article" />
+  <meta property="og:url"         content={`https://litigaforge.com/blog/${post.slug}`} />
+  <meta property="og:site_name"   content="LitigaForge AI" />
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card"        content="summary_large_image" />
+  <meta name="twitter:title"       content={post.data.title} />
+  <meta name="twitter:description" content={post.data.description} />
+
+  <!-- Schema.org -->
+  <script type="application/ld+json" set:html={JSON.stringify(articleSchema)} />
+  <script type="application/ld+json" set:html={JSON.stringify(faqSchema)} />
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', system-ui, sans-serif; background: #f8fafc; color: #1e293b; }
+    .header { background: #1e1b4b; padding: 18px 40px; display: flex; align-items: center; justify-content: space-between; }
+    .logo  { color: #fff; font-weight: 800; font-size: 18px; text-decoration: none; }
+    .nav-cta { background: #6366f1; color: #fff; padding: 9px 18px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 13px; }
+    .container { max-width: 780px; margin: 0 auto; padding: 40px 24px; }
+    .breadcrumb { font-size: 13px; color: #94a3b8; margin-bottom: 24px; }
+    .breadcrumb a { color: #6366f1; text-decoration: none; }
+    .meta-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
+    .badge { font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 20px; }
+    .badge-country { background: #ede9fe; color: #6d28d9; }
+    .badge-area    { background: #f0fdf4; color: #16a34a; }
+    .badge-time    { background: #f1f5f9; color: #64748b; }
+    h1 { font-size: 32px; font-weight: 900; line-height: 1.3; color: #0f172a; margin-bottom: 16px; }
+    .intro { font-size: 18px; color: #475569; line-height: 1.7; margin-bottom: 32px; padding-bottom: 32px; border-bottom: 1px solid #e2e8f0; }
+    .content h2 { font-size: 22px; font-weight: 800; color: #0f172a; margin: 32px 0 14px; }
+    .content p  { font-size: 16px; color: #374151; line-height: 1.8; margin-bottom: 16px; }
+    .content blockquote { background: #f0fdf4; border-left: 4px solid #16a34a; padding: 12px 18px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 14px; color: #15803d; font-weight: 600; }
+    .content h3 { font-size: 18px; font-weight: 700; color: #1e293b; margin: 24px 0 10px; }
+    .content ul, .content ol { padding-left: 24px; margin-bottom: 16px; }
+    .content li { font-size: 15px; color: #374151; line-height: 1.7; margin-bottom: 6px; }
+    .cta-box { background: linear-gradient(135deg, #1e1b4b, #312e81); color: #fff; border-radius: 16px; padding: 32px; text-align: center; margin: 40px 0; }
+    .cta-box h3 { font-size: 22px; font-weight: 800; margin-bottom: 10px; }
+    .cta-box p  { color: #a5b4fc; margin-bottom: 20px; }
+    .cta-btn { background: #6366f1; color: #fff; padding: 14px 28px; border-radius: 10px; text-decoration: none; font-weight: 700; font-size: 15px; display: inline-block; }
+    .tags { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 32px; padding-top: 24px; border-top: 1px solid #e2e8f0; }
+    .tag { background: #f1f5f9; color: #64748b; font-size: 12px; padding: 4px 12px; border-radius: 6px; }
+    .date { font-size: 13px; color: #94a3b8; margin-bottom: 24px; }
+  </style>
+</head>
+<body>
+
+  <header class="header">
+    <a href="https://litigaforge.com" class="logo">⚖ LitigaForge AI</a>
+    <a href="https://litigaforge.com" class="nav-cta">Free Legal Analysis →</a>
+  </header>
+
+  <div class="container">
+    <div class="breadcrumb">
+      <a href="https://litigaforge.com">Home</a> →
+      <a href="/blog">Legal Guides</a> →
+      {post.data.country}
+    </div>
+
+    <div class="meta-row">
+      <span class="badge badge-country">{post.data.country}</span>
+      <span class="badge badge-area">{post.data.legalArea}</span>
+      <span class="badge badge-time">{post.data.readTime}</span>
+    </div>
+
+    <h1>{post.data.title}</h1>
+    <div class="date">
+      Published {new Date(post.data.date).toLocaleDateString('en-IN', {day:'numeric',month:'long',year:'numeric'})} · LitigaForge AI Editorial Team
+    </div>
+    <p class="intro">{post.data.description}</p>
+
+    <div class="content">
+      <Content />
+    </div>
+
+    <div class="cta-box">
+      <h3>Get Your Free Legal Analysis</h3>
+      <p>Tell LitigaForge AI about your situation — get an instant assessment in 60 seconds</p>
+      <a href="https://litigaforge.com" class="cta-btn">Analyse My Case Free →</a>
+    </div>
+
+    <div class="tags">
+      {post.data.tags?.map(tag => <span class="tag">{tag}</span>)}
+    </div>
+  </div>
+
+</body>
+</html>
