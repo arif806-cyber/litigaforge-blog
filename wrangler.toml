@@ -1,0 +1,13 @@
+# Cloudflare Pages configuration
+# This file suppresses the wrangler autoconfig warning
+
+name = "litigaforge-blog"
+compatibility_date = "2026-06-11"
+
+# Build settings
+[build]
+command = "npm run build"
+output_dir = "dist"
+
+# Pages settings
+pages_build_output_dir = "dist"
