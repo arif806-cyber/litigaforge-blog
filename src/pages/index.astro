@@ -1,8 +1,8 @@
 ---
 // src/pages/index.astro
 // Root page — redirects to /blog
-
-const html = `
+export const prerender = true;
+---
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -15,9 +15,3 @@ const html = `
   <p>Redirecting to <a href="/blog">LitigaForge AI Legal Blog</a>...</p>
 </body>
 </html>
-`;
-
-export const prerender = true;
----
-
-{html}
