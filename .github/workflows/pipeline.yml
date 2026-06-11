@@ -25,6 +25,11 @@ jobs:
       group: content-pipeline
       cancel-in-progress: false
 
+    # Required permissions for the auto-generated GITHUB_TOKEN
+    permissions:
+      contents: write          # push articles to src/content/blog/
+      actions: write           # cache published_slugs.json
+
     steps:
       # 1. Check out the repo (so pipeline.py can commit files back)
       - name: Checkout repo
@@ -62,7 +67,7 @@ jobs:
           GITHUB_TOKEN:    ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPO:     ${{ github.repository }}
           INDEXNOW_KEY:    ${{ secrets.INDEXNOW_KEY }}
-          BLOG_DOMAIN:     ${{ secrets.BLOG_DOMAIN || 'litigaforge.com' }}
+          BLOG_DOMAIN:     ${{ secrets.BLOG_DOMAIN || 'blog.litigaforge.com' }}
           SCORE_THRESHOLD: "60"
           MAX_ARTICLES:    ${{ github.event.inputs.max_articles || '3' }}
         run: python pipeline.py
