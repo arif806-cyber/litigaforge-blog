@@ -1,0 +1,15 @@
+# Build output
+dist/
+.astro/
+
+# Dependencies
+node_modules/
+
+# Lockfiles (npm install regenerates; .npmrc disables lockfile)
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# Logs & OS
+*.log
+.DS_Store
