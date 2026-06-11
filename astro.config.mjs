@@ -5,7 +5,10 @@ import tailwind from '@astrojs/tailwind';
 export default defineConfig({
   site: 'https://litigaforge.com',
   integrations: [
-    sitemap(),
+    sitemap({
+      filter: (page) => !page.includes('/admin'),
+    }),
     tailwind(),
   ],
+  trailingSlash: 'never',
 });
