@@ -1,0 +1,114 @@
+---
+// src/pages/blog/index.astro
+// Blog listing page — litigaforge.com/blog
+
+import { getCollection } from 'astro:content';
+
+const posts = (await getCollection('blog'))
+  .sort((a, b) => new Date(b.data.date) - new Date(a.data.date));
+
+const countries = [...new Set(posts.map(p => p.data.country))];
+---
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Legal Guides & Resources — LitigaForge AI</title>
+  <meta name="description" content="Free legal guides for India, UAE, UK, USA and more. AI-powered analysis by LitigaForge." />
+  <link rel="canonical" href="https://litigaforge.com/blog" />
+  <!-- Preconnect for performance -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', system-ui, sans-serif; background: #f8fafc; color: #1e293b; }
+    .header { background: #1e1b4b; padding: 20px 40px; display: flex; align-items: center; justify-content: space-between; }
+    .logo { color: #fff; font-weight: 800; font-size: 20px; text-decoration: none; }
+    .nav-cta { background: #6366f1; color: #fff; padding: 10px 20px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 14px; }
+    .hero { background: linear-gradient(135deg, #1e1b4b, #312e81); color: #fff; padding: 60px 40px; text-align: center; }
+    .hero h1 { font-size: 36px; font-weight: 900; margin-bottom: 12px; }
+    .hero p { color: #a5b4fc; font-size: 18px; }
+    .filters { padding: 24px 40px; display: flex; gap: 10px; flex-wrap: wrap; background: #fff; border-bottom: 1px solid #e2e8f0; }
+    .filter-btn { padding: 7px 16px; border-radius: 20px; border: 1px solid #e2e8f0; background: #f8fafc; font-size: 13px; cursor: pointer; font-weight: 500; color: #475569; text-decoration: none; }
+    .filter-btn.active { background: #6366f1; color: #fff; border-color: #6366f1; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 24px; padding: 40px; max-width: 1200px; margin: 0 auto; }
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 24px; text-decoration: none; color: inherit; display: flex; flex-direction: column; transition: box-shadow 0.2s; }
+    .card:hover { box-shadow: 0 8px 30px rgba(99,102,241,0.15); }
+    .card-meta { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+    .badge { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 20px; }
+    .badge-country { background: #ede9fe; color: #6d28d9; }
+    .badge-area { background: #f0fdf4; color: #16a34a; }
+    .badge-time { background: #f1f5f9; color: #64748b; }
+    .card h2 { font-size: 17px; font-weight: 700; line-height: 1.4; margin-bottom: 10px; color: #1e293b; }
+    .card p { font-size: 13px; color: #64748b; line-height: 1.6; flex: 1; }
+    .card-footer { margin-top: 16px; padding-top: 16px; border-top: 1px solid #f1f5f9; display: flex; justify-content: space-between; align-items: center; }
+    .read-more { font-size: 13px; font-weight: 600; color: #6366f1; }
+    .date { font-size: 11px; color: #94a3b8; }
+    .empty { text-align: center; padding: 80px; color: #94a3b8; grid-column: 1/-1; }
+    .stats { display: flex; gap: 40px; justify-content: center; padding: 30px; background: #fff; border-bottom: 1px solid #e2e8f0; }
+    .stat { text-align: center; }
+    .stat-num { font-size: 28px; font-weight: 900; color: #6366f1; }
+    .stat-label { font-size: 12px; color: #94a3b8; margin-top: 2px; }
+  </style>
+</head>
+<body>
+
+  <header class="header">
+    <a href="https://litigaforge.com" class="logo">⚖ LitigaForge AI</a>
+    <a href="https://litigaforge.com" class="nav-cta">Free Legal Analysis →</a>
+  </header>
+
+  <div class="hero">
+    <h1>Legal Guides & Resources</h1>
+    <p>AI-powered legal insights for India, UAE, UK, USA and more</p>
+  </div>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-num">{posts.length}</div>
+      <div class="stat-label">Legal Guides</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">{countries.length}</div>
+      <div class="stat-label">Countries Covered</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">Free</div>
+      <div class="stat-label">Always Free to Read</div>
+    </div>
+  </div>
+
+  <div class="filters">
+    <a href="/blog" class="filter-btn active">All Countries</a>
+    {countries.map(c => (
+      <a href={`/blog?country=${c}`} class="filter-btn">{c}</a>
+    ))}
+  </div>
+
+  <div class="grid">
+    {posts.length === 0 && (
+      <div class="empty">
+        <div style="font-size:48px;margin-bottom:16px">📭</div>
+        <div>No articles yet — pipeline will publish soon</div>
+      </div>
+    )}
+    {posts.map(post => (
+      <a href={`/blog/${post.slug}`} class="card">
+        <div class="card-meta">
+          <span class="badge badge-country">{post.data.country}</span>
+          <span class="badge badge-area">{post.data.legalArea}</span>
+          <span class="badge badge-time">{post.data.readTime}</span>
+        </div>
+        <h2>{post.data.title}</h2>
+        <p>{post.data.description}</p>
+        <div class="card-footer">
+          <span class="read-more">Read guide →</span>
+          <span class="date">{new Date(post.data.date).toLocaleDateString('en-IN', {day:'numeric',month:'short',year:'numeric'})}</span>
+        </div>
+      </a>
+    ))}
+  </div>
+
+</body>
+</html>
