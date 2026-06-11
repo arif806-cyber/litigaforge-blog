@@ -430,8 +430,10 @@ async def push_to_github(slug: str, content: str) -> bool:
 
     encoded  = base64.b64encode(content.encode("utf-8")).decode("utf-8")
     api_url  = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{path}"
+    # Use Bearer for auto-generated GITHUB_TOKEN; token works for classic PATs
+    auth_prefix = "Bearer" if GITHUB_TOKEN.startswith("ghs_") or GITHUB_TOKEN.startswith("ghp_") else "token"
     headers  = {
-        "Authorization": f"token {GITHUB_TOKEN}",
+        "Authorization": f"{auth_prefix} {GITHUB_TOKEN}",
         "Accept":        "application/vnd.github.v3+json",
         "User-Agent":    "LitigaForgeBot/1.0"
     }
