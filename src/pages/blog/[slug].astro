@@ -35,6 +35,28 @@ const articleSchema = {
   "author": { "@type": "Organization", "name": "LitigaForge AI", "url": "https://litigaforge.com" },
   "publisher": { "@type": "Organization", "name": "LitigaForge AI", "logo": { "@type": "ImageObject", "url": "https://litigaforge.com/logo.png" } }
 };
+
+// Related articles — internal linking for SEO. Score by relevance: same country
+// is worth more than same practice area (legalArea can be a "A | B" list).
+const norm = (s) => (s || "").toLowerCase().trim();
+const areasOf = (s) => norm(s).split("|").map(a => a.trim()).filter(Boolean);
+const postAreas = areasOf(post.data.legalArea);
+const allPosts = await getCollection("blog");
+const related = allPosts
+  .filter(p => p.slug !== post.slug)
+  .map(p => {
+    let score = 0;
+    if (norm(p.data.country) === norm(post.data.country)) score += 2;
+    if (areasOf(p.data.legalArea).some(a => postAreas.includes(a))) score += 1;
+    return { p, score };
+  })
+  .filter(x => x.score > 0)
+  .sort((a, b) =>
+    b.score - a.score ||
+    new Date(b.p.data.date).getTime() - new Date(a.p.data.date).getTime()
+  )
+  .slice(0, 4)
+  .map(x => x.p);
 ---
 
 <!DOCTYPE html>
@@ -91,6 +113,14 @@ const articleSchema = {
     .tags { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 32px; padding-top: 24px; border-top: 1px solid #e2e8f0; }
     .tag { background: #f1f5f9; color: #64748b; font-size: 12px; padding: 4px 12px; border-radius: 6px; }
     .date { font-size: 13px; color: #94a3b8; margin-bottom: 24px; }
+    .related { margin-top: 40px; padding-top: 28px; border-top: 1px solid #e2e8f0; }
+    .related h2 { font-size: 20px; font-weight: 800; color: #0f172a; margin-bottom: 16px; }
+    .related-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
+    .related-card { display: block; padding: 16px; border: 1px solid #e2e8f0; border-radius: 10px; text-decoration: none; color: #0f172a; background: #fff; transition: box-shadow .2s ease, transform .2s ease; }
+    .related-card:hover { box-shadow: 0 6px 18px rgba(15,23,42,.08); transform: translateY(-2px); }
+    .related-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: .04em; color: #6366f1; text-transform: uppercase; }
+    .related-title { font-weight: 700; font-size: 15px; line-height: 1.4; margin-top: 6px; }
+    .related-time { display: block; font-size: 12px; color: #94a3b8; margin-top: 8px; }
   </style>
 </head>
 <body>
@@ -128,6 +158,21 @@ const articleSchema = {
       <p>Tell LitigaForge AI about your situation — get an instant assessment in 60 seconds</p>
       <a href="https://litigaforge.com" class="cta-btn">Analyse My Case Free →</a>
     </div>
+
+    {related.length > 0 && (
+      <div class="related">
+        <h2>Related Legal Guides</h2>
+        <div class="related-grid">
+          {related.map(r => (
+            <a class="related-card" href={`/blog/${r.slug}`}>
+              <span class="related-eyebrow">{r.data.country} · {r.data.legalArea}</span>
+              <p class="related-title">{r.data.title}</p>
+              {r.data.readTime && <span class="related-time">{r.data.readTime}</span>}
+            </a>
+          ))}
+        </div>
+      </div>
+    )}
 
     <div class="tags">
       {post.data.tags?.map(tag => <span class="tag">{tag}</span>)}
