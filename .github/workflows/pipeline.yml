@@ -4,7 +4,7 @@ name: LitigaForge Content Pipeline
 on:
   schedule:
     # Runs every 2 hours — uses ~36 min/day of GitHub's free minutes
-    - cron: '0 */2 * * *'
+    - cron: '17 */2 * * *'  # off-peak minute -- GitHub drops many ':00' scheduled runs
 
   # Manual trigger from GitHub Actions UI
   workflow_dispatch:
