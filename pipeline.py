@@ -151,13 +151,172 @@ def _get_curated_topics() -> list[dict]:
     return topics
 
 
+# ─── TOPIC CLUSTERING (SEO topical authority) ────────────────────────────────
+# Publish ~CLUSTER_MIN_POSTS related guides for ONE (country, legalArea) cluster
+# before moving to the next, so Google sees deep topical coverage instead of a
+# scatter of one-off posts. Clusters are filled in CLUSTERS order; once every
+# cluster is full the pipeline falls back to Reddit trending for freshness.
+CLUSTER_MIN_POSTS = int(os.environ.get("CLUSTER_MIN_POSTS", "4"))
+CONTENT_DIR = os.path.join("src", "content", "blog")
+
+CLUSTERS = [
+    {"country": "India", "legalArea": "Employment Law", "topics": [
+        "Unpaid salary and full and final settlement rights for employees in India",
+        "Notice period, resignation and relieving letter rights under Indian labour law",
+        "Workplace sexual harassment in India: your rights under the POSH Act 2013",
+        "Provident Fund and gratuity claims: what Indian employees are legally owed",
+    ]},
+    {"country": "India", "legalArea": "Family", "topics": [
+        "Divorce and alimony rights for women in India: maintenance explained",
+        "Child custody laws in India: how family courts decide and what parents should know",
+        "Mutual consent divorce in India: step-by-step process and timeline",
+        "Domestic violence protection orders in India under the PWDVA 2005",
+    ]},
+    {"country": "India", "legalArea": "Consumer", "topics": [
+        "Consumer complaint for a defective product in India: refunds under the Consumer Protection Act 2019",
+        "How to file a RERA complaint against a builder for delayed possession in India",
+        "E-commerce refund and return rights for online shoppers in India",
+        "Banking and insurance grievances in India: using the ombudsman",
+    ]},
+    {"country": "India", "legalArea": "Tenancy", "topics": [
+        "Tenant rights in India: security deposit refund and protection from illegal eviction",
+        "Rent agreement disputes in India: what landlords and tenants must know",
+        "How to legally evict a non-paying tenant in India",
+        "Rent control and fair rent laws across Indian states",
+    ]},
+    {"country": "USA", "legalArea": "Employment Law", "topics": [
+        "Non-compete agreements in the USA: are they enforceable in your state?",
+        "Wrongful termination and at-will employment in the USA explained",
+        "Unpaid overtime claims under the FLSA in the USA",
+        "Workplace discrimination and how to file an EEOC complaint in the USA",
+    ]},
+    {"country": "UK", "legalArea": "Employment Law", "topics": [
+        "Unfair dismissal claims in the UK: eligibility, process and compensation",
+        "Redundancy pay rights for employees in the UK",
+        "Settlement agreements in the UK: what to check before you sign",
+        "Workplace discrimination claims under the Equality Act 2010 in the UK",
+    ]},
+    {"country": "UAE", "legalArea": "Employment Law", "topics": [
+        "End-of-service gratuity calculation under UAE labour law",
+        "Arbitrary dismissal and wrongful termination rights in the UAE",
+        "Unpaid wages and the UAE Wage Protection System explained",
+        "Resignation, notice period and labour ban rules in the UAE",
+    ]},
+]
+
+
+def _read_frontmatter(path: str) -> dict:
+    """Minimal YAML front-matter reader — only the flat keys we need."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return {}
+    if not text.startswith("---"):
+        return {}
+    end = text.find("\n---", 3)
+    block = text[3:end] if end != -1 else text[3:]
+    data = {}
+    for line in block.splitlines():
+        if ":" not in line:
+            continue
+        key, _, val = line.partition(":")
+        data[key.strip()] = val.strip().strip('"').strip("'")
+    return data
+
+
+def _load_existing_articles() -> list[dict]:
+    """Return [{slug, country, legalArea}] for every published markdown file."""
+    out = []
+    try:
+        names = sorted(os.listdir(CONTENT_DIR))
+    except FileNotFoundError:
+        return out
+    for name in names:
+        if not name.endswith(".md"):
+            continue
+        fm = _read_frontmatter(os.path.join(CONTENT_DIR, name))
+        out.append({
+            "slug":      name[:-3],
+            "country":   fm.get("country", ""),
+            "legalArea": fm.get("legalArea", ""),
+        })
+    return out
+
+
+def _area_matches(cluster_area: str, post_area: str) -> bool:
+    """legalArea may be an 'Employment Law | Contract' list — match any part."""
+    parts = [p.strip() for p in post_area.lower().split("|")]
+    return cluster_area.lower().strip() in parts
+
+
+def _cluster_count(articles: list[dict], cluster: dict) -> int:
+    return sum(
+        1 for a in articles
+        if a["country"].lower() == cluster["country"].lower()
+        and _area_matches(cluster["legalArea"], a["legalArea"])
+    )
+
+
+def _slugify(title: str) -> str:
+    slug = re.sub(r"[^a-z0-9\s-]", "", title.lower())
+    return re.sub(r"\s+", "-", slug).strip("-")[:60]
+
+
+def decide_cluster_topics(n: int) -> list[dict]:
+    """
+    Cluster-aware topic selection. Returns up to n topic dicts drawn from the
+    single 'active' cluster — an in-progress cluster (1..MIN-1 posts) is filled
+    first, otherwise a not-yet-started cluster is begun. Caps at the cluster's
+    remaining slots so one run never overshoots CLUSTER_MIN_POSTS. Returns []
+    when every defined cluster already has >= CLUSTER_MIN_POSTS posts (or its
+    angles are exhausted), which signals the caller to use Reddit trending.
+    """
+    articles = _load_existing_articles()
+    existing_slugs = {a["slug"] for a in articles}
+    counts = [(c, _cluster_count(articles, c)) for c in CLUSTERS]
+
+    in_progress = [(c, k) for c, k in counts if 0 < k < CLUSTER_MIN_POSTS]
+    not_started = [(c, k) for c, k in counts if k == 0]
+
+    if in_progress:
+        cluster, have = in_progress[0]
+    elif not_started:
+        cluster, have = not_started[0]
+    else:
+        print("  ✓ All clusters full — switching to Reddit trending for freshness")
+        return []
+
+    need = max(0, min(n, CLUSTER_MIN_POSTS - have))
+    print(f"  🎯 Active cluster: {cluster['country']} · {cluster['legalArea']} "
+          f"({have}/{CLUSTER_MIN_POSTS} done) — adding up to {need} this run")
+
+    topics = []
+    for title in cluster["topics"]:
+        if len(topics) >= need:
+            break
+        if _slugify(title) in existing_slugs:
+            continue  # this angle is already published
+        topics.append({
+            "title":     title,
+            "country":   cluster["country"],
+            "legalArea": cluster["legalArea"],
+            "subreddit": "curated-cluster",
+            "upvotes":   400,
+            "comments":  80,
+            "score":     max(SCORE_THRESHOLD, 80),
+            "permalink": "",
+        })
+    return topics
+
+
 # ─── STEP 2: GENERATE ARTICLE ────────────────────────────────────────────────
 # Try Gemini first, fall back to Groq if Gemini fails or hits limit
 
 ARTICLE_PROMPT = """You are a senior legal content writer for LitigaForge AI (litigaforge.com).
 LitigaForge is an AI-powered legal platform operating in India, USA, UK, UAE, Germany, Australia, Canada, Singapore.
 
-A Reddit post is trending: "{title}" in {country}.
+A trending legal topic to cover: "{title}" in {country}.{area_hint}
 
 Write a comprehensive, SEO-optimized 2000-word legal article that directly answers this question.
 Use real law names, sections, and case references where applicable.
@@ -256,7 +415,13 @@ async def call_groq(prompt: str) -> str:
 
 async def generate_article(post: dict) -> dict:
     """Try Groq (primary) → Gemini (fallback) → fallback template"""
-    prompt = ARTICLE_PROMPT.format(title=post["title"], country=post["country"])
+    area_hint = ""
+    if post.get("legalArea"):
+        area_hint = (f' This topic belongs to the "{post["legalArea"]}" practice area — '
+                     f'set the "legalArea" field to exactly "{post["legalArea"]}".')
+    prompt = ARTICLE_PROMPT.format(
+        title=post["title"], country=post["country"], area_hint=area_hint
+    )
 
     raw = None
     source = None
@@ -321,7 +486,7 @@ async def generate_article(post: dict) -> dict:
         "slug":          slug,
         "readTime":      "7 min read",
         "country":       post["country"],
-        "legalArea":     "Employment Law",
+        "legalArea":     post.get("legalArea", "Employment Law"),
         "intro":         f"This is one of the most common legal questions in {post['country']}. Here is exactly what the law says and what your rights are.",
         "sections": [
             {
@@ -522,9 +687,16 @@ async def main():
     published_slugs = load_published()
     print(f"📚 Already published: {len(published_slugs)} articles\n")
 
-    # Step 1: Fetch Reddit
-    print("📡 Step 1: Fetching Reddit posts...")
-    posts = await fetch_reddit_posts()
+    # Step 1: Choose topics — clusters first (topical authority), then Reddit.
+    # Fill ~CLUSTER_MIN_POSTS related guides per (country, legalArea) cluster
+    # before moving on; once every cluster is full, switch to Reddit trending.
+    print("🧭 Step 1: Selecting topics (cluster-first)...")
+    posts = decide_cluster_topics(MAX_ARTICLES)
+    if posts:
+        print(f"  ✓ Cluster mode: {len(posts)} guide(s) queued")
+    else:
+        print("📡 Falling back to Reddit trending posts...")
+        posts = await fetch_reddit_posts()
 
     if not posts:
         print("No qualifying posts found this run.")
