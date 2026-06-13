@@ -1,19 +1,34 @@
 # Cloudflare static-assets redirects for retired/duplicate blog slugs.
-# Format: <from>  <to>  <status>
-# Apex litigaforge.com/blog is redirected by the Express api-server (real 301);
-# these cover direct *.workers.dev traffic + secondary crawlers.
+# Format: <from>  <to>  <status>. Both no-slash and trailing-slash sources
+# are listed (Astro serves articles at trailing-slash URLs; old indexed links
+# may use either). Apex litigaforge.com/blog 301s are handled by the api-server.
 /blog/germany-labour-law-claim-compensation-for-overtime  /blog/germany-labour-law-claim-compensation-overtime  301
+/blog/germany-labour-law-claim-compensation-for-overtime/  /blog/germany-labour-law-claim-compensation-overtime  301
 /blog/germany-labour-law-overtime-compensation  /blog/germany-labour-law-claim-compensation-overtime  301
+/blog/germany-labour-law-overtime-compensation/  /blog/germany-labour-law-claim-compensation-overtime  301
 /blog/startup-founder-legal-guide-protect-ip-in-india  /blog/startup-founder-legal-guide-protect-ip-india  301
+/blog/startup-founder-legal-guide-protect-ip-in-india/  /blog/startup-founder-legal-guide-protect-ip-india  301
 /blog/india-tenant-rights-security-deposit-refund  /blog/tenant-rights-in-india  301
+/blog/india-tenant-rights-security-deposit-refund/  /blog/tenant-rights-in-india  301
 /blog/how-to-send-legal-notice-for-wrongful-termination-in-india  /blog/wrongful-termination-in-india  301
+/blog/how-to-send-legal-notice-for-wrongful-termination-in-india/  /blog/wrongful-termination-in-india  301
 /blog/how-to-send-a-legal-notice-to-your-employer-for-wrongful-ter  /blog/wrongful-termination-in-india  301
+/blog/how-to-send-a-legal-notice-to-your-employer-for-wrongful-ter/  /blog/wrongful-termination-in-india  301
 /blog/divorce-and-alimony-rights-for-women-in-india  /blog/india-divorce-laws-and-alimony  301
+/blog/divorce-and-alimony-rights-for-women-in-india/  /blog/india-divorce-laws-and-alimony  301
 /blog/india-divorce-laws-and-alimony-rights  /blog/india-divorce-laws-and-alimony  301
+/blog/india-divorce-laws-and-alimony-rights/  /blog/india-divorce-laws-and-alimony  301
 /blog/understanding-divorce-and-alimony-laws-in-india-what-women-n  /blog/india-divorce-laws-and-alimony  301
+/blog/understanding-divorce-and-alimony-laws-in-india-what-women-n/  /blog/india-divorce-laws-and-alimony  301
 /blog/consumer-complaint-defective-product-refund-india  /blog/consumer-complaint-refund-india-2026  301
+/blog/consumer-complaint-defective-product-refund-india/  /blog/consumer-complaint-refund-india-2026  301
 /blog/uae-labour-law-end-of-service-gratuity  /blog/uae-end-of-service-gratuity-calculation  301
+/blog/uae-labour-law-end-of-service-gratuity/  /blog/uae-end-of-service-gratuity-calculation  301
 /blog/uae-labour-law-end-of-service-gratuity-calculation  /blog/uae-end-of-service-gratuity-calculation  301
+/blog/uae-labour-law-end-of-service-gratuity-calculation/  /blog/uae-end-of-service-gratuity-calculation  301
 /blog/unfair-dismissal-claims-uk  /blog/uk-unfair-dismissal-claim-compensation  301
+/blog/unfair-dismissal-claims-uk/  /blog/uk-unfair-dismissal-claim-compensation  301
 /blog/understanding-australias-workplace-bullying-laws-and-how-to-  /blog/australia-workplace-bullying-laws-2026  301
+/blog/understanding-australias-workplace-bullying-laws-and-how-to-/  /blog/australia-workplace-bullying-laws-2026  301
 /blog/welcome  /blog  301
+/blog/welcome/  /blog  301
