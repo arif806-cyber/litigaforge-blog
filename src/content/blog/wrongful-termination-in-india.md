@@ -1,7 +1,7 @@
 ---
 title: "India Wrongful Termination Notice 2026"
 description: "Send a legal notice to your employer for wrongful termination in India with our expert guide"
-slug: "how-to-send-legal-notice-for-wrongful-termination-in-india"
+slug: "wrongful-termination-in-india"
 date: "2026-06-11T15:45:13.031803+00:00"
 country: "India"
 legalArea: "Employment Law"
@@ -9,7 +9,7 @@ tags: ["Wrongful Termination", "Legal Notice", "India", "Employment Law", "Indus
 readTime: "15 min read"
 author: "LitigaForge AI Editorial Team"
 authorUrl: "https://litigaforge.com/about"
-canonicalUrl: "https://blog.litigaforge.com/blog/how-to-send-legal-notice-for-wrongful-termination-in-india"
+canonicalUrl: "https://litigaforge.com/blog/wrongful-termination-in-india"
 schema: "FAQPage"
 ---
 

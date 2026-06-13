@@ -1,5 +1,5 @@
 ---
-title: "Mutual consent divorce in India: step-by-step process a — Legal Guide 2026"
+title: "Mutual Consent Divorce in India: Step-by-Step Process and Timeline (2026 Guide)"
 description: "Complete legal guide: Mutual consent divorce in India: step-by-step process and timeline. Expert AI analysis for India by LitigaForge."
 slug: "mutual-consent-divorce-in-india-step-by-step-process-and-tim"
 date: "2026-06-12T14:45:57.300580+00:00"

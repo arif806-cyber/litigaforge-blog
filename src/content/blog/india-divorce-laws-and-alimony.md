@@ -1,7 +1,7 @@
 ---
 title: "India Divorce Laws 2026"
 description: "Discover maintenance rights for women in India, including alimony laws and divorce procedures"
-slug: "india-divorce-laws-and-alimony-rights"
+slug: "india-divorce-laws-and-alimony"
 date: "2026-06-12T11:00:43.725695+00:00"
 country: "India"
 legalArea: "Family"
@@ -9,7 +9,7 @@ tags: ["India divorce laws", "alimony rights", "maintenance rights", "Hindu Marr
 readTime: "15 min read"
 author: "LitigaForge AI Editorial Team"
 authorUrl: "https://litigaforge.com/about"
-canonicalUrl: "https://litigaforge.com/blog/india-divorce-laws-and-alimony-rights"
+canonicalUrl: "https://litigaforge.com/blog/india-divorce-laws-and-alimony"
 schema: "FAQPage"
 ---
 

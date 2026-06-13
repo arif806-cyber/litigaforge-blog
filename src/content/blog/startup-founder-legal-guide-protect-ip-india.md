@@ -1,7 +1,7 @@
 ---
 title: "India 2026: Protect IP"
 description: "Learn how to protect your intellectual property when hiring contractors in India"
-slug: "startup-founder-legal-guide-protect-ip-in-india"
+slug: "startup-founder-legal-guide-protect-ip-india"
 date: "2026-06-13T06:45:17.608750+00:00"
 country: "India"
 legalArea: "Contract | Corporate | Employment Law"
@@ -9,7 +9,7 @@ tags: ["Intellectual Property", "Contract Law", "Employment Law", "Startup Found
 readTime: "15 min read"
 author: "LitigaForge AI Editorial Team"
 authorUrl: "https://litigaforge.com/about"
-canonicalUrl: "https://litigaforge.com/blog/startup-founder-legal-guide-protect-ip-in-india"
+canonicalUrl: "https://litigaforge.com/blog/startup-founder-legal-guide-protect-ip-india"
 schema: "FAQPage"
 ---
 

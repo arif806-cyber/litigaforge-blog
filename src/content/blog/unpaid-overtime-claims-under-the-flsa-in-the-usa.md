@@ -1,5 +1,5 @@
 ---
-title: "Unpaid overtime claims under the FLSA in the USA — Legal Guide 2026"
+title: "Unpaid Overtime Claims Under the FLSA in the USA (2026 Guide)"
 description: "Complete legal guide: Unpaid overtime claims under the FLSA in the USA. Expert AI analysis for USA by LitigaForge."
 slug: "unpaid-overtime-claims-under-the-flsa-in-the-usa"
 date: "2026-06-12T16:45:57.832905+00:00"

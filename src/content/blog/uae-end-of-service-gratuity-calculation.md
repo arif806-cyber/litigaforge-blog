@@ -1,7 +1,7 @@
 ---
 title: "UAE Labour Law 2026: End of Service"
 description: "Calculate end of service gratuity in UAE with our expert guide on labour law and employer obligations"
-slug: "uae-labour-law-end-of-service-gratuity-calculation"
+slug: "uae-end-of-service-gratuity-calculation"
 date: "2026-06-11T20:40:34.346001+00:00"
 country: "UAE"
 legalArea: "Employment Law"
@@ -9,7 +9,7 @@ tags: ["UAE Labour Law", "End of Service Gratuity", "Employment Contract", "Limi
 readTime: "15 min read"
 author: "LitigaForge AI Editorial Team"
 authorUrl: "https://litigaforge.com/about"
-canonicalUrl: "https://litigaforge.com/blog/uae-labour-law-end-of-service-gratuity-calculation"
+canonicalUrl: "https://litigaforge.com/blog/uae-end-of-service-gratuity-calculation"
 schema: "FAQPage"
 ---
 

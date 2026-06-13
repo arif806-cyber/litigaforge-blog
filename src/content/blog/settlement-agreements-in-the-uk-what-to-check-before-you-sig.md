@@ -1,5 +1,5 @@
 ---
-title: "Settlement agreements in the UK: what to check before y — Legal Guide 2026"
+title: "Settlement Agreements in the UK: What to Check Before You Sign (2026 Guide)"
 description: "Complete legal guide: Settlement agreements in the UK: what to check before you sign. Expert AI analysis for UK by LitigaForge."
 slug: "settlement-agreements-in-the-uk-what-to-check-before-you-sig"
 date: "2026-06-12T18:46:02.638357+00:00"

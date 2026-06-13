@@ -1,7 +1,7 @@
 ---
 title: "India 2026: Defective Product Refunds"
 description: "Get refunds for defective products in India under Consumer Protection Act 2019"
-slug: "consumer-complaint-defective-product-refund-india"
+slug: "consumer-complaint-refund-india-2026"
 date: "2026-06-12T20:45:22.671280+00:00"
 country: "India"
 legalArea: "Consumer"
@@ -9,7 +9,7 @@ tags: ["Consumer Protection Act 2019", "Defective Product", "Refund", "India", "
 readTime: "12 min read"
 author: "LitigaForge AI Editorial Team"
 authorUrl: "https://litigaforge.com/about"
-canonicalUrl: "https://litigaforge.com/blog/consumer-complaint-defective-product-refund-india"
+canonicalUrl: "https://litigaforge.com/blog/consumer-complaint-refund-india-2026"
 schema: "FAQPage"
 ---
 

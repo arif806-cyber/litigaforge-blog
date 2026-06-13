@@ -1,5 +1,5 @@
 ---
-title: "Singapore employment law: Notice period requirements an — Legal Guide 2026"
+title: "Singapore Employment Law: Notice Period Requirements and When You Can Leave (2026 Guide)"
 description: "Complete legal guide: Singapore employment law: Notice period requirements and when you can leave with. Expert AI analysis for Singapore by LitigaForge."
 slug: "singapore-employment-law-notice-period-requirements-and-when"
 date: "2026-06-12T12:35:14.688935+00:00"
