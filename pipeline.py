@@ -1,16 +1,26 @@
 """
 LitigaForge AI — Autonomous Content Pipeline
 =============================================
-Reddit → AI Article → GitHub Commit → IndexNow
+Quota-balanced topic engine → AI article → GitHub commit → IndexNow
 
 Free stack:
-  - Reddit public JSON  (no API key)
-  - Gemini 1.5 Flash    (1,500 req/day free)
+  - Gemini 2.5 Flash    (free tier)
   - Groq Llama 3.3 70B  (14,400 req/day free)
-  - GitHub API          (free)
+  - GitHub Contents API (free)
   - IndexNow API        (free)
 
-Run via GitHub Actions cron: every 2 hours
+Runs every 2 hours (12 stateless runs/day). Each run reads the already-published
+markdown to decide what is still owed for *today* (Asia/Kolkata), then publishes
+at most PER_RUN_MAX fresh, deduplicated, balanced articles until the daily target
+is met.
+
+Controls (env):
+  GENERATION_ENABLED   FAIL-CLOSED kill switch. Only "true"/"1"/"yes"/"on" runs;
+                       anything else (incl. missing) keeps the pipeline PAUSED.
+  DRY_RUN              "true"/"1"               -> generate 5 samples, write nothing
+  DAILY_TARGET         default 7
+  MAX_ARTICLES         per-run cap, default 2
+  MIN_WORDS            article body floor, default 1500
 """
 
 import os
@@ -19,194 +29,90 @@ import base64
 import asyncio
 import httpx
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 # ─── CONFIG FROM ENVIRONMENT ─────────────────────────────────────────────────
-GEMINI_API_KEY  = os.environ.get("GEMINI_API_KEY", "")
-GROQ_API_KEY    = os.environ.get("GROQ_API_KEY", "")
-GITHUB_TOKEN    = os.environ.get("GITHUB_TOKEN", "")
-GITHUB_REPO     = os.environ.get("GITHUB_REPO", "arif806-cyber/litigaforge-blog")
-INDEXNOW_KEY    = os.environ.get("INDEXNOW_KEY", "")
-BLOG_DOMAIN     = os.environ.get("BLOG_DOMAIN", "blog.litigaforge.com")
-SCORE_THRESHOLD = int(os.environ.get("SCORE_THRESHOLD", "60"))
-MAX_ARTICLES    = int(os.environ.get("MAX_ARTICLES", "3"))  # per run
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "")
+GITHUB_TOKEN   = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_REPO    = os.environ.get("GITHUB_REPO", "arif806-cyber/litigaforge-blog")
+INDEXNOW_KEY   = os.environ.get("INDEXNOW_KEY", "")
+BLOG_DOMAIN    = os.environ.get("BLOG_DOMAIN", "blog.litigaforge.com")
+SITE_DOMAIN    = os.environ.get("SITE_DOMAIN", "litigaforge.com")
 
-# ─── SUBREDDITS TO MONITOR ───────────────────────────────────────────────────
-SUBREDDITS = [
-    ("LegalAdviceIndia", "India"),
-    ("legaladvice",      "USA"),
-    ("india",            "India"),
-    ("UKLegal",          "UK"),
-    ("dubai",            "UAE"),
-    ("auslaw",           "Australia"),
-    ("legaladviceuk",    "UK"),
-    ("Entrepreneur",     "India"),   # startup founders asking legal Q's
-]
+DAILY_TARGET = int(os.environ.get("DAILY_TARGET", "7"))
+PER_RUN_MAX  = int(os.environ.get("MAX_ARTICLES", "2"))
+MIN_WORDS    = int(os.environ.get("MIN_WORDS", "1500"))
+# A full 1700-2000+ word article serializes to ~9-12k output tokens; give plenty
+# of headroom so the JSON is never truncated mid-string (which is unparseable).
+ARTICLE_MAX_TOKENS = int(os.environ.get("ARTICLE_MAX_TOKENS", "24000"))
 
-LEGAL_KEYWORDS = [
-    "legal", "law", "rights", "notice", "contract", "employer",
-    "landlord", "salary", "court", "terminate", "fired", "evict",
-    "sue", "compensation", "dispute", "complaint", "clause",
-    "agreement", "penalty", "harassment", "wrongful", "maternity",
-    "probation", "notice period", "nda", "non-compete"
-]
+# Kill switch — FAIL CLOSED. Generation only runs when GENERATION_ENABLED is
+# explicitly truthy. A missing/empty/unknown value keeps the pipeline PAUSED so
+# a scheduled, manual, or VM-dispatched run can never publish unapproved content.
+# Production go-live = set the repo variable GENERATION_ENABLED=true.
+_gen = os.environ.get("GENERATION_ENABLED", "false").strip().lower()
+GENERATION_ENABLED = _gen in ("1", "true", "yes", "on")
+DRY_RUN = os.environ.get("DRY_RUN", "").strip().lower() in ("1", "true", "yes", "on")
 
-# ─── ALREADY PUBLISHED (prevent duplicates) ──────────────────────────────────
+CONTENT_DIR    = os.path.join("src", "content", "blog")
 PUBLISHED_FILE = "published_slugs.json"
 
-def load_published() -> set:
-    try:
-        with open(PUBLISHED_FILE) as f:
-            return set(json.load(f))
-    except Exception:
-        return set()
+# India Standard Time has no DST — a fixed +5:30 offset needs no tzdata.
+IST = timezone(timedelta(hours=5, minutes=30))
 
-def save_published(slugs: set):
-    with open(PUBLISHED_FILE, "w") as f:
-        json.dump(list(slugs), f)
+# ─── COUNTRY QUOTA & CATEGORY ROTATION ───────────────────────────────────────
+# Daily target = 7 articles: 6 fixed + 1 rotating slot. India leads (it is the
+# core market); the four established markets get one each; one of the emerging
+# markets rotates in daily so all three get steady coverage over time.
+COUNTRY_QUOTA = {
+    "India": 2,
+    "USA":   1,
+    "UK":    1,
+    "UAE":   1,
+    "Germany": 1,
+}
+ROTATING_COUNTRIES = ["Australia", "Canada", "Singapore"]  # 1 slot/day, rotates
 
-# ─── STEP 1: FETCH REDDIT ────────────────────────────────────────────────────
-async def fetch_reddit_posts() -> list[dict]:
-    """
-    Fetch trending legal posts from Reddit.
-    Falls back to curated legal topics if Reddit blocks cloud IPs.
-    """
-    posts = []
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"}
-
-    async with httpx.AsyncClient(headers=headers, timeout=15) as client:
-        for sub, country in SUBREDDITS:
-            try:
-                url = f"https://www.reddit.com/r/{sub}/hot.json?limit=15"
-                r = await client.get(url)
-
-                if r.status_code != 200:
-                    print(f"  ⚠ Reddit {sub}: HTTP {r.status_code}")
-                    continue
-
-                children = r.json()["data"]["children"]
-                for item in children:
-                    d = item["data"]
-                    title_lower = d["title"].lower()
-
-                    if not any(kw in title_lower for kw in LEGAL_KEYWORDS):
-                        continue
-                    if d["ups"] < 50:
-                        continue
-
-                    score = (d["ups"] * 0.5) + (d["num_comments"] * 0.4) + (10 if d["ups"] > 300 else 0)
-                    posts.append({
-                        "title":     d["title"],
-                        "country":   country,
-                        "subreddit": f"r/{sub}",
-                        "upvotes":   d["ups"],
-                        "comments":  d["num_comments"],
-                        "score":     round(score),
-                        "permalink": f"https://reddit.com{d['permalink']}",
-                    })
-
-                print(f"  ✓ r/{sub}: fetched {len(children)} posts")
-                await asyncio.sleep(1)
-
-            except Exception as e:
-                print(f"  ✗ Reddit r/{sub} error: {e}")
-
-    if posts:
-        posts.sort(key=lambda x: x["score"], reverse=True)
-        print(f"\n📊 Total qualifying posts: {len(posts)}")
-        return posts
-
-    # Reddit blocked — use curated legal topics as fallback
-    print("\n  Reddit blocked — using curated legal topics as fallback")
-    return _get_curated_topics()
-
-
-# Curated legal topics for when Reddit is blocked
-_CURATED_TOPICS = [
-    {"title": "How to send a legal notice to your employer for wrongful termination in India", "country": "India", "subreddit": "r/LegalAdviceIndia", "upvotes": 420, "comments": 85, "score": 0},
-    {"title": "Understanding tenant rights in the UAE: What to do when your landlord won't return the security deposit", "country": "UAE", "subreddit": "r/dubai", "upvotes": 380, "comments": 72, "score": 0},
-    {"title": "Can my employer force me to sign a non-compete agreement in California? Legal rights explained", "country": "USA", "subreddit": "r/legaladvice", "upvotes": 510, "comments": 120, "score": 0},
-    {"title": "UK employment law: How to claim unfair dismissal and what compensation you may receive", "country": "UK", "subreddit": "r/legaladviceuk", "upvotes": 350, "comments": 60, "score": 0},
-    {"title": "Understanding Australia's workplace bullying laws and how to file a complaint with Fair Work", "country": "Australia", "subreddit": "r/auslaw", "upvotes": 290, "comments": 45, "score": 0},
-    {"title": "Consumer rights in India: What to do when an e-commerce company refuses to refund a defective product", "country": "India", "subreddit": "r/LegalAdviceIndia", "upvotes": 460, "comments": 95, "score": 0},
-    {"title": "Family law in Canada: How child custody decisions are made and what factors the court considers", "country": "Canada", "subreddit": "r/legaladvice", "upvotes": 320, "comments": 55, "score": 0},
-    {"title": "Singapore employment law: Notice period requirements and when you can leave without serving notice", "country": "Singapore", "subreddit": "r/legaladvice", "upvotes": 270, "comments": 40, "score": 0},
-    {"title": "Germany labour law: How to claim compensation for overtime that was never paid", "country": "Germany", "subreddit": "r/legaladvice", "upvotes": 310, "comments": 50, "score": 0},
-    {"title": "Startup founder legal guide: How to protect your intellectual property when hiring contractors in India", "country": "India", "subreddit": "r/Entrepreneur", "upvotes": 340, "comments": 65, "score": 0},
-    {"title": "Rental agreement disputes in the UK: What to do when your landlord increases rent illegally", "country": "UK", "subreddit": "r/legaladviceuk", "upvotes": 390, "comments": 78, "score": 0},
-    {"title": "How to file a consumer complaint against a fraudulent builder in India — NCDRC and RERA explained", "country": "India", "subreddit": "r/LegalAdviceIndia", "upvotes": 480, "comments": 110, "score": 0},
-    {"title": "US immigration law: H-1B visa rights and what to do when your employer violates your terms", "country": "USA", "subreddit": "r/legaladvice", "upvotes": 440, "comments": 88, "score": 0},
-    {"title": "Understanding divorce and alimony laws in India: What women need to know about maintenance rights", "country": "India", "subreddit": "r/LegalAdviceIndia", "upvotes": 520, "comments": 135, "score": 0},
-    {"title": "UAE labour law: End of service gratuity calculation and when employers must pay it", "country": "UAE", "subreddit": "r/dubai", "upvotes": 370, "comments": 68, "score": 0},
+CATEGORIES = [
+    "Employment Law",
+    "Family Law",
+    "Tenant & Property Rights",
+    "Consumer Rights",
+    "Criminal Law",
+    "Immigration Law",
+    "Business & Startup Law",
+    "Tax & Finance Law",
+    "Intellectual Property",
+    "Civil Rights",
 ]
 
+# Seed *angles* (not full titles) used only to steer the model toward a concrete,
+# searchable subtopic. The model proposes the actual title and must avoid topics
+# that already exist.
+CATEGORY_SEEDS = {
+    "Employment Law": ["unfair dismissal claim", "recovering unpaid wages", "notice period & resignation rights", "workplace harassment complaint", "redundancy / severance pay"],
+    "Family Law": ["divorce grounds & process", "child custody & visitation", "spousal maintenance / alimony", "domestic violence protection order", "validity of a prenuptial agreement"],
+    "Tenant & Property Rights": ["security deposit refund", "protection from illegal eviction", "rent increase rules", "landlord repair obligations", "breaking a lease early"],
+    "Consumer Rights": ["refund for a defective product", "e-commerce return rights", "service deficiency complaint", "misleading advertising claim", "enforcing a product warranty"],
+    "Criminal Law": ["filing a police complaint / FIR", "bail process & rights", "your rights on arrest", "reporting online fraud / cybercrime", "responding to a defamation case"],
+    "Immigration Law": ["work-visa rights & employer violations", "permanent residency pathway", "consequences of a visa overstay", "family / dependent visa sponsorship", "appealing a visa refusal"],
+    "Business & Startup Law": ["registering a company", "founder / shareholder agreement", "contractor vs employee classification", "tax / GST registration steps", "winding up a company"],
+    "Tax & Finance Law": ["responding to a tax notice", "claiming deductions & exemptions", "GST/VAT dispute resolution", "penalties for late filing", "appealing a tax assessment"],
+    "Intellectual Property": ["registering a trademark", "remedies for copyright infringement", "patent filing basics", "protecting IP when using contractors", "enforcing an NDA / trade secret"],
+    "Civil Rights": ["filing a right-to-information request", "data privacy & protection rights", "anti-discrimination protections", "public grievance redressal", "enforcing fundamental rights"],
+}
 
-def _get_curated_topics() -> list[dict]:
-    """Return curated legal topics as fallback when Reddit is blocked."""
-    import random
-    topics = random.sample(_CURATED_TOPICS, min(3, len(_CURATED_TOPICS)))
-    for t in topics:
-        t["score"] = round((t["upvotes"] * 0.5) + (t["comments"] * 0.4) + 20)
-    topics.sort(key=lambda x: x["score"], reverse=True)
-    return topics
-
-
-# ─── TOPIC CLUSTERING (SEO topical authority) ────────────────────────────────
-# Publish ~CLUSTER_MIN_POSTS related guides for ONE (country, legalArea) cluster
-# before moving to the next, so Google sees deep topical coverage instead of a
-# scatter of one-off posts. Clusters are filled in CLUSTERS order; once every
-# cluster is full the pipeline falls back to Reddit trending for freshness.
-CLUSTER_MIN_POSTS = int(os.environ.get("CLUSTER_MIN_POSTS", "4"))
-CONTENT_DIR = os.path.join("src", "content", "blog")
-
-CLUSTERS = [
-    {"country": "India", "legalArea": "Employment Law", "topics": [
-        "Unpaid salary and full and final settlement rights for employees in India",
-        "Notice period, resignation and relieving letter rights under Indian labour law",
-        "Workplace sexual harassment in India: your rights under the POSH Act 2013",
-        "Provident Fund and gratuity claims: what Indian employees are legally owed",
-    ]},
-    {"country": "India", "legalArea": "Family", "topics": [
-        "Divorce and alimony rights for women in India: maintenance explained",
-        "Child custody laws in India: how family courts decide and what parents should know",
-        "Mutual consent divorce in India: step-by-step process and timeline",
-        "Domestic violence protection orders in India under the PWDVA 2005",
-    ]},
-    {"country": "India", "legalArea": "Consumer", "topics": [
-        "Consumer complaint for a defective product in India: refunds under the Consumer Protection Act 2019",
-        "How to file a RERA complaint against a builder for delayed possession in India",
-        "E-commerce refund and return rights for online shoppers in India",
-        "Banking and insurance grievances in India: using the ombudsman",
-    ]},
-    {"country": "India", "legalArea": "Tenancy", "topics": [
-        "Tenant rights in India: security deposit refund and protection from illegal eviction",
-        "Rent agreement disputes in India: what landlords and tenants must know",
-        "How to legally evict a non-paying tenant in India",
-        "Rent control and fair rent laws across Indian states",
-    ]},
-    {"country": "USA", "legalArea": "Employment Law", "topics": [
-        "Non-compete agreements in the USA: are they enforceable in your state?",
-        "Wrongful termination and at-will employment in the USA explained",
-        "Unpaid overtime claims under the FLSA in the USA",
-        "Workplace discrimination and how to file an EEOC complaint in the USA",
-    ]},
-    {"country": "UK", "legalArea": "Employment Law", "topics": [
-        "Unfair dismissal claims in the UK: eligibility, process and compensation",
-        "Redundancy pay rights for employees in the UK",
-        "Settlement agreements in the UK: what to check before you sign",
-        "Workplace discrimination claims under the Equality Act 2010 in the UK",
-    ]},
-    {"country": "UAE", "legalArea": "Employment Law", "topics": [
-        "End-of-service gratuity calculation under UAE labour law",
-        "Arbitrary dismissal and wrongful termination rights in the UAE",
-        "Unpaid wages and the UAE Wage Protection System explained",
-        "Resignation, notice period and labour ban rules in the UAE",
-    ]},
-]
+# Stopwords + generic legal/geo terms stripped when normalizing a topic for
+# duplicate detection. Country is keyed separately, so country names are stripped.
+_STOP = set("the a an and or of to in on for with your you our we how what when where why which who is are be can do does this that these those at by from as it its will may must should not into about after before your their his her i".split())
+_GENERIC = set("law laws legal rights guide rules act explained complete need know 2024 2025 2026 india usa us uk uae germany australia canada singapore american british".split())
 
 
+# ─── FRONT-MATTER + EXISTING-ARTICLE INDEX ───────────────────────────────────
 def _read_frontmatter(path: str) -> dict:
-    """Minimal YAML front-matter reader — only the flat keys we need."""
+    """Minimal front-matter reader. Values are JSON-encoded (see build_markdown),
+    so we json.loads each value and fall back to a stripped string."""
     try:
         with open(path, encoding="utf-8") as f:
             text = f.read()
@@ -221,12 +127,60 @@ def _read_frontmatter(path: str) -> dict:
         if ":" not in line:
             continue
         key, _, val = line.partition(":")
-        data[key.strip()] = val.strip().strip('"').strip("'")
+        val = val.strip()
+        try:
+            data[key.strip()] = json.loads(val)
+        except (ValueError, json.JSONDecodeError):
+            data[key.strip()] = val.strip('"').strip("'")
     return data
 
 
+def _normalize_topic(title: str) -> str:
+    """Stable dedup key: lowercase, drop punctuation, stopwords, generic/geo
+    words, then sort the remaining significant tokens so word order doesn't
+    matter ('tenant rights india' == 'india rights tenant')."""
+    words = re.findall(r"[a-z0-9]+", (title or "").lower())
+    sig = [w for w in words if w not in _STOP and w not in _GENERIC and len(w) > 2]
+    return " ".join(sorted(set(sig)))
+
+
+def _map_area(area: str) -> str:
+    """Best-effort map a legacy legalArea string to one of the 10 categories
+    (only used to estimate category breadth for older articles)."""
+    a = (area or "").lower()
+    if "employ" in a or "dismiss" in a or "termination" in a or "salary" in a or "wage" in a:
+        return "Employment Law"
+    if "family" in a or "divorce" in a or "custody" in a or "alimony" in a or "marriage" in a:
+        return "Family Law"
+    if "tenan" in a or "rent" in a or "propert" in a or "landlord" in a or "evict" in a:
+        return "Tenant & Property Rights"
+    if "consumer" in a or "refund" in a or "product" in a:
+        return "Consumer Rights"
+    if "criminal" in a or "police" in a or "fir" in a or "bail" in a or "arrest" in a:
+        return "Criminal Law"
+    if "immigr" in a or "visa" in a or "h1b" in a or "h-1b" in a or "residency" in a:
+        return "Immigration Law"
+    if "corporate" in a or "startup" in a or "business" in a or "contract" in a or "company" in a or "ip" in a or "intellect" in a:
+        return "Business & Startup Law"
+    if "tax" in a or "finance" in a or "gst" in a:
+        return "Tax & Finance Law"
+    return "Civil Rights"
+
+
+def _parse_date_ist(s: str):
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(IST).date()
+    except (ValueError, TypeError):
+        return None
+
+
 def _load_existing_articles() -> list[dict]:
-    """Return [{slug, country, legalArea}] for every published markdown file."""
+    """Index every published markdown file with the fields the engine needs."""
     out = []
     try:
         names = sorted(os.listdir(CONTENT_DIR))
@@ -236,328 +190,485 @@ def _load_existing_articles() -> list[dict]:
         if not name.endswith(".md"):
             continue
         fm = _read_frontmatter(os.path.join(CONTENT_DIR, name))
+        title = fm.get("title", "")
+        category = fm.get("category") or _map_area(fm.get("legalArea", ""))
         out.append({
-            "slug":      name[:-3],
-            "country":   fm.get("country", ""),
-            "legalArea": fm.get("legalArea", ""),
+            "slug":            name[:-3],
+            "title":           title,
+            "country":         fm.get("country", ""),
+            "category":        category,
+            "legalArea":       fm.get("legalArea", ""),
+            "normalizedTopic": fm.get("normalizedTopic") or _normalize_topic(title),
+            "date_ist":        _parse_date_ist(fm.get("date", "")),
+            "date_raw":        fm.get("date", ""),
         })
     return out
 
 
-def _area_matches(cluster_area: str, post_area: str) -> bool:
-    """legalArea may be an 'Employment Law | Contract' list — match any part."""
-    parts = [p.strip() for p in post_area.lower().split("|")]
-    return cluster_area.lower().strip() in parts
+# ─── SLUGS ───────────────────────────────────────────────────────────────────
+def _clean_slug(text: str, maxlen: int = 70) -> str:
+    """Lowercase hyphenated slug, truncated at a word boundary (never mid-word)."""
+    s = re.sub(r"[^a-z0-9\s-]", "", (text or "").lower())
+    s = re.sub(r"\s+", "-", s)
+    s = re.sub(r"-+", "-", s).strip("-")
+    if len(s) <= maxlen:
+        return s
+    cut = s[:maxlen]
+    if "-" in cut:
+        cut = cut[:cut.rfind("-")]
+    return cut.strip("-")
 
 
-def _cluster_count(articles: list[dict], cluster: dict) -> int:
-    return sum(
-        1 for a in articles
-        if a["country"].lower() == cluster["country"].lower()
-        and _area_matches(cluster["legalArea"], a["legalArea"])
-    )
+def _dedupe_slug(slug: str, taken: set) -> str:
+    if slug not in taken:
+        return slug
+    i = 2
+    while f"{slug}-{i}" in taken:
+        i += 1
+    return f"{slug}-{i}"
 
 
-def _slugify(title: str) -> str:
-    slug = re.sub(r"[^a-z0-9\s-]", "", title.lower())
-    return re.sub(r"\s+", "-", slug).strip("-")[:60]
+# ─── QUOTA / ROTATION ENGINE ─────────────────────────────────────────────────
+def todays_quota(today) -> dict:
+    """Per-country quota for `today` — 6 fixed + 1 rotating = 7."""
+    q = dict(COUNTRY_QUOTA)
+    rc = ROTATING_COUNTRIES[today.toordinal() % len(ROTATING_COUNTRIES)]
+    q[rc] = q.get(rc, 0) + 1
+    return q
 
 
-def decide_cluster_topics(n: int) -> list[dict]:
-    """
-    Cluster-aware topic selection. Returns up to n topic dicts drawn from the
-    single 'active' cluster — an in-progress cluster (1..MIN-1 posts) is filled
-    first, otherwise a not-yet-started cluster is begun. Caps at the cluster's
-    remaining slots so one run never overshoots CLUSTER_MIN_POSTS. Returns []
-    when every defined cluster already has >= CLUSTER_MIN_POSTS posts (or its
-    angles are exhausted), which signals the caller to use Reddit trending.
-    """
-    articles = _load_existing_articles()
-    existing_slugs = {a["slug"] for a in articles}
-    counts = [(c, _cluster_count(articles, c)) for c in CLUSTERS]
+def _violates_consecutive(recent: list, country: str, category: str) -> bool:
+    """No 3rd consecutive article of the same category, nor same country, in
+    today's chronological publish order."""
+    tail_cat = [c for (_, c) in recent[-2:]]
+    if len(tail_cat) == 2 and tail_cat[0] == tail_cat[1] == category:
+        return True
+    tail_ctry = [c for (c, _) in recent[-2:]]
+    if len(tail_ctry) == 2 and tail_ctry[0] == tail_ctry[1] == country:
+        return True
+    return False
 
-    in_progress = [(c, k) for c, k in counts if 0 < k < CLUSTER_MIN_POSTS]
-    not_started = [(c, k) for c, k in counts if k == 0]
 
-    if in_progress:
-        cluster, have = in_progress[0]
-    elif not_started:
-        cluster, have = not_started[0]
-    else:
-        print("  ✓ All clusters full — switching to Reddit trending for freshness")
+def _pick_slot(quota, by_country, cat_by_country, recent):
+    """Pick the most under-quota country, then its least-covered category that
+    doesn't break the consecutive rule."""
+    avail = [(c, quota[c] - by_country.get(c, 0)) for c in quota if quota[c] - by_country.get(c, 0) > 0]
+    if not avail:
+        return None
+    avail.sort(key=lambda x: -x[1])
+    for country, _ in avail:
+        cats = sorted(CATEGORIES, key=lambda cat: (cat_by_country.get((country, cat), 0), CATEGORIES.index(cat)))
+        for cat in cats:
+            if _violates_consecutive(recent, country, cat):
+                continue
+            return {"country": country, "category": cat}
+    # Everything left would break the consecutive rule — relax it.
+    country = avail[0][0]
+    cats = sorted(CATEGORIES, key=lambda cat: (cat_by_country.get((country, cat), 0), CATEGORIES.index(cat)))
+    return {"country": country, "category": cats[0]}
+
+
+def decide_slots(per_run_max: int, existing: list[dict]) -> list[dict]:
+    """Return up to per_run_max (country, category) slots still owed today."""
+    today = datetime.now(IST).date()
+    todays = [a for a in existing if a["date_ist"] == today]
+    if len(todays) >= DAILY_TARGET:
+        print(f"  ✓ Daily target already met ({len(todays)}/{DAILY_TARGET}) — nothing to publish")
         return []
 
-    need = max(0, min(n, CLUSTER_MIN_POSTS - have))
-    print(f"  🎯 Active cluster: {cluster['country']} · {cluster['legalArea']} "
-          f"({have}/{CLUSTER_MIN_POSTS} done) — adding up to {need} this run")
+    quota = todays_quota(today)
+    by_country = {}
+    for a in todays:
+        by_country[a["country"]] = by_country.get(a["country"], 0) + 1
 
-    topics = []
-    for title in cluster["topics"]:
-        if len(topics) >= need:
+    cat_by_country = {}
+    for a in existing:
+        key = (a["country"], a["category"])
+        cat_by_country[key] = cat_by_country.get(key, 0) + 1
+
+    recent = [(a["country"], a["category"]) for a in sorted(todays, key=lambda x: x["date_raw"])]
+
+    remaining = DAILY_TARGET - len(todays)
+    n = min(per_run_max, remaining)
+    chosen = []
+    for _ in range(n):
+        slot = _pick_slot(quota, by_country, cat_by_country, recent)
+        if not slot:
             break
-        if _slugify(title) in existing_slugs:
-            continue  # this angle is already published
-        topics.append({
-            "title":     title,
-            "country":   cluster["country"],
-            "legalArea": cluster["legalArea"],
-            "subreddit": "curated-cluster",
-            "upvotes":   400,
-            "comments":  80,
-            "score":     max(SCORE_THRESHOLD, 80),
-            "permalink": "",
-        })
-    return topics
+        chosen.append(slot)
+        by_country[slot["country"]] = by_country.get(slot["country"], 0) + 1
+        cat_by_country[(slot["country"], slot["category"])] = cat_by_country.get((slot["country"], slot["category"]), 0) + 1
+        recent.append((slot["country"], slot["category"]))
+    return chosen
 
 
-# ─── STEP 2: GENERATE ARTICLE ────────────────────────────────────────────────
-# Try Gemini first, fall back to Groq if Gemini fails or hits limit
+# ─── AI CALLS ────────────────────────────────────────────────────────────────
+async def call_gemini(prompt: str, max_tokens: int = 8192) -> str:
+    """Gemini 2.5 Flash — fall back to 2.0 if rate-limited.
 
-ARTICLE_PROMPT = """You are a senior legal content writer for LitigaForge AI (litigaforge.com).
-LitigaForge is an AI-powered legal platform operating in India, USA, UK, UAE, Germany, Australia, Canada, Singapore.
-
-A trending legal topic to cover: "{title}" in {country}.{area_hint}
-
-Write a comprehensive, SEO-optimized 2000-word legal article that directly answers this question.
-Use real law names, sections, and case references where applicable.
-
-Return ONLY valid JSON — no markdown fences, no preamble, no explanation:
-
-{{
-  "title": "SEO H1 title — max 60 chars, include country and year 2026",
-  "metaDescription": "Meta description — max 155 chars, include primary keyword",
-  "slug": "url-slug-lowercase-hyphens-no-special-chars",
-  "readTime": "X min read",
-  "country": "{country}",
-  "legalArea": "Employment Law | Tenancy | Contract | Consumer | Corporate | Family",
-  "intro": "2-sentence compelling hook that directly addresses the Reddit question",
-  "sections": [
-    {{
-      "h2": "Section heading",
-      "body": "Minimum 300-word authoritative content. Include specific law names (e.g. Industrial Disputes Act 1947 Section 25F), penalties, timelines, practical steps. Write for the layperson.",
-      "keyTakeaway": "One actionable sentence"
-    }}
-  ],
-  "faq": [
-    {{"q": "Common question", "a": "Concise answer under 80 words"}}
-  ],
-  "cta": "One sentence CTA to try LitigaForge AI free at litigaforge.com",
-  "tags": ["tag1", "tag2", "tag3", "tag4", "tag5"],
-  "internalLink": "Contract Review | Legal Notice Generator | Case Analysis"
-}}
-
-Requirements:
-- Minimum 5 sections
-- Minimum 4 FAQ entries
-- Include actual Indian/UAE/UK law names and sections
-- No fluff — every sentence must add value
-- Optimized for Google Featured Snippets (direct answers, numbered lists)
-"""
-
-async def call_gemini(prompt: str) -> str:
-    """Gemini 2.5 Flash — fallback to 2.0 if rate-limited"""
+    On 2.5 models we set thinkingBudget=0: 'thinking' tokens are billed against
+    the output budget and, for a pure-generation JSON task, can starve the actual
+    answer (truncated/empty responses). We don't need reasoning tokens here."""
     if not GEMINI_API_KEY:
         raise ValueError("No GEMINI_API_KEY")
-
-    models = ["gemini-2.5-flash", "gemini-2.0-flash"]
-    for model in models:
+    for model in ("gemini-2.5-flash", "gemini-2.0-flash"):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0.7,
-                "maxOutputTokens": 4000,
-            }
-        }
-        async with httpx.AsyncClient(timeout=60) as client:
+        gen = {"temperature": 0.7, "maxOutputTokens": max_tokens}
+        if model.startswith("gemini-2.5"):
+            gen["thinkingConfig"] = {"thinkingBudget": 0}
+        payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": gen}
+        async with httpx.AsyncClient(timeout=180) as client:
             r = await client.post(url, json=payload)
             data = r.json()
-
             if "error" in data:
                 err = data["error"]
                 if err.get("code") == 429:
-                    print(f"  ⚠ Gemini {model} rate-limited, retrying...")
+                    print(f"  ⚠ Gemini {model} rate-limited, trying next model...")
                     await asyncio.sleep(2)
                     continue
                 raise ValueError(f"Gemini {model} error: {err.get('message', err)}")
+            cand = (data.get("candidates") or [{}])[0]
+            parts = cand.get("content", {}).get("parts", []) or []
+            text = "".join(p.get("text", "") for p in parts)
+            if not text:
+                fr = cand.get("finishReason")
+                print(f"  ⚠ Gemini {model} returned no text (finishReason={fr})")
+                continue
+            return text
+    raise ValueError("All Gemini models failed/rate-limited")
 
-            return data["candidates"][0]["content"]["parts"][0]["text"]
 
-    raise ValueError("All Gemini models rate-limited")
-
-
-async def call_groq(prompt: str) -> str:
-    """Groq Llama 3.3 70B — 14,400 req/day free"""
+async def call_groq(prompt: str, max_tokens: int = 8000) -> str:
+    """Groq Llama 3.3 70B — 14,400 req/day free."""
     if not GROQ_API_KEY:
         raise ValueError("No GROQ_API_KEY")
-
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=90) as client:
         r = await client.post(
             "https://api.groq.com/openai/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json"
-            },
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
             json={
                 "model": "llama-3.3-70b-versatile",
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.7,
-                "max_tokens": 4000,
-            }
+                "max_tokens": max_tokens,
+            },
         )
         data = r.json()
-
         if "error" in data:
             raise ValueError(f"Groq error: {data['error']['message']}")
-
         return data["choices"][0]["message"]["content"]
 
 
-async def generate_article(post: dict) -> dict:
-    """Try Groq (primary) → Gemini (fallback) → fallback template"""
-    area_hint = ""
-    if post.get("legalArea"):
-        area_hint = (f' This topic belongs to the "{post["legalArea"]}" practice area — '
-                     f'set the "legalArea" field to exactly "{post["legalArea"]}".')
-    prompt = ARTICLE_PROMPT.format(
-        title=post["title"], country=post["country"], area_hint=area_hint
-    )
+# ─── TITLE PROPOSAL (dedup-aware) ────────────────────────────────────────────
+TITLE_PROMPT = """You are an SEO editor for LitigaForge AI. Propose ONE specific, search-optimized blog article title.
 
+Country: {country}
+Category: {category}
+Example angles for inspiration (do NOT copy verbatim): {seeds}
+
+These topics already exist — your title MUST cover a clearly DIFFERENT angle or subtopic:
+{existing}
+
+Rules:
+- Be specific: name a concrete situation, right, or statute.
+- Include the country name and the year 2026.
+- 50-75 characters is ideal.
+- No clickbait, no quotes around the title.
+
+Return ONLY the title text on a single line, nothing else."""
+
+
+async def propose_title(country: str, category: str, existing_titles: list[str]) -> str | None:
+    seeds = ", ".join(CATEGORY_SEEDS.get(category, []))
+    existing = "\n".join(f"- {t}" for t in existing_titles[:40]) or "- (none yet)"
+    prompt = TITLE_PROMPT.format(country=country, category=category, seeds=seeds, existing=existing)
     raw = None
-    source = None
-
-    # Primary: Groq (14,400 req/day, reliable)
     try:
-        print("  🤖 Trying Groq Llama 3.3...")
-        raw = await call_groq(prompt)
-        source = "Groq"
-    except Exception as e:
-        print(f"  ⚠ Groq failed: {e}")
-
-    # Fallback: Gemini (rate-limited, 0-1500 req/day)
-    if not raw:
+        raw = await call_groq(prompt, max_tokens=120)
+    except Exception:
         try:
-            print("  🤖 Falling back to Gemini...")
-            raw = await call_gemini(prompt)
-            source = "Gemini"
+            raw = await call_gemini(prompt, max_tokens=120)
         except Exception as e:
-            print(f"  ⚠ Gemini failed: {e}")
+            print(f"  ⚠ Title proposal failed: {e}")
+            return None
+    if not raw:
+        return None
+    line = raw.strip().splitlines()[0].strip().strip('"').strip("#").strip()
+    return line[:120] if line else None
 
-    # Parse JSON
-    if raw:
-        try:
-            # Strip markdown fences and any non-JSON text
-            clean = raw.strip()
-            if clean.startswith("```json"):
-                clean = clean[7:].strip()
-            if clean.startswith("```"):
-                clean = clean[3:].strip()
-            if clean.endswith("```"):
-                clean = clean[:-3].strip()
-            # Handle trailing non-JSON text
-            if clean and clean[-1] != "}":
-                # Find the last closing brace
-                last_brace = clean.rfind("}")
-                if last_brace > 0:
-                    clean = clean[:last_brace + 1].strip()
 
-            article = json.loads(clean)
-            print(f"  ✓ Article generated via {source}: {article.get('title', '')[:50]}...")
-            return article
-        except json.JSONDecodeError as e:
-            print(f"  ⚠ JSON parse error: {e}")
-            # Try to extract JSON with regex
+# ─── ARTICLE GENERATION ──────────────────────────────────────────────────────
+ARTICLE_PROMPT = """You are a senior legal content writer for LitigaForge AI (litigaforge.com), an AI legal platform operating in India, USA, UK, UAE, Germany, Australia, Canada and Singapore.
+
+Write a comprehensive, original, SEO-optimized legal article.
+Topic: "{title}"
+Country: {country}
+Category: {category}
+
+Return ONLY valid JSON — no markdown fences, no preamble, no explanation:
+
+{{
+  "title": "Specific, descriptive SEO H1 — include the country and the year 2026 (aim 50-75 characters)",
+  "metaDescription": "Meta description, max 155 chars, include the primary keyword",
+  "readTime": "X min read",
+  "intro": "2-3 sentence hook that directly answers the core question",
+  "sections": [
+    {{"h2": "Section heading", "body": "At least 350 words of authoritative, specific content: name real statutes and section numbers, penalties, timelines, and numbered practical steps. Plain language for a layperson.", "keyTakeaway": "One actionable sentence"}}
+  ],
+  "faq": [{{"q": "Common question", "a": "Concise answer under 80 words"}}],
+  "cta": "One sentence call-to-action to try LitigaForge AI free at litigaforge.com",
+  "tags": ["tag1", "tag2", "tag3", "tag4", "tag5"]
+}}
+
+Requirements:
+- AT LEAST 6 sections, each AT LEAST 350 words. The combined body MUST exceed 1700 words.
+- EXACTLY 5 FAQ entries.
+- Use real {country} statutes, acts and section numbers relevant to {category}.
+- No fluff — every sentence must add value.
+- Optimized for Google Featured Snippets (direct answers, numbered lists)."""
+
+STRENGTHEN = "\n\nIMPORTANT: A previous draft was too short. Write substantially MORE: at least 8 sections, each 400+ words, total body well over 2000 words. Add detailed examples, step-by-step procedures and statute citations."
+
+
+def _parse_article_json(raw: str) -> dict | None:
+    clean = raw.strip()
+    if clean.startswith("```json"):
+        clean = clean[7:].strip()
+    if clean.startswith("```"):
+        clean = clean[3:].strip()
+    if clean.endswith("```"):
+        clean = clean[:-3].strip()
+    if clean and clean[-1] != "}":
+        last = clean.rfind("}")
+        if last > 0:
+            clean = clean[:last + 1].strip()
+    try:
+        return json.loads(clean)
+    except json.JSONDecodeError:
+        m = re.search(r"\{[\s\S]*\}", clean)
+        if m:
             try:
-                match = re.search(r'\{[\s\S]*\}', clean)
-                if match:
-                    article = json.loads(match.group(0))
-                    print(f"  ✓ Article extracted via regex: {article.get('title', '')[:50]}...")
-                    return article
+                return json.loads(m.group(0))
             except json.JSONDecodeError:
-                pass
+                return None
+    return None
 
-    # Last resort: structured fallback template
-    print("  ⚠ Using fallback template")
-    slug = re.sub(r"[^a-z0-9\s-]", "", post["title"].lower())
-    slug = re.sub(r"\s+", "-", slug).strip("-")[:60]
+
+async def generate_article(title: str, country: str, category: str, strengthen: bool = False) -> dict | None:
+    """Generate + parse an article. Gemini is primary (large output ceiling needed
+    for a full long-form article); Groq is the fallback. Each provider's output is
+    parsed independently, so a truncated/garbled response from one falls through
+    to the other instead of failing the whole slot."""
+    prompt = ARTICLE_PROMPT.format(title=title, country=country, category=category)
+    if strengthen:
+        prompt += STRENGTHEN
+    providers = [
+        ("Gemini", lambda: call_gemini(prompt, max_tokens=ARTICLE_MAX_TOKENS)),
+        ("Groq", lambda: call_groq(prompt, max_tokens=8000)),
+    ]
+    for name, fn in providers:
+        try:
+            raw = await fn()
+        except Exception as e:
+            print(f"  ⚠ {name} failed: {e}")
+            continue
+        article = _parse_article_json(raw)
+        if article:
+            print(f"  ✓ Draft via {name}")
+            return article
+        print(f"  ⚠ {name} returned unparseable/truncated JSON ({len(raw)} chars)")
+    return None
+
+
+def _article_wordcount(article: dict) -> int:
+    """Word count of the substantive body (intro + section bodies), excluding
+    FAQ and CTA boilerplate, so padding FAQs can't fake the floor."""
+    text = article.get("intro", "") + " " + " ".join(
+        s.get("body", "") for s in article.get("sections", [])
+    )
+    return len(re.findall(r"\b\w+\b", text))
+
+
+async def generate_with_minwords(title: str, country: str, category: str) -> dict | None:
+    """Generate, enforcing MIN_WORDS with one strengthened retry, else discard."""
+    for attempt in range(2):
+        article = await generate_article(title, country, category, strengthen=(attempt > 0))
+        if not article:
+            continue
+        wc = _article_wordcount(article)
+        if wc >= MIN_WORDS:
+            return article
+        action = "discarding" if attempt else "retrying with stronger prompt"
+        print(f"  ⚠ Body only {wc} words (< {MIN_WORDS}) — {action}")
+    return None
+
+
+# ─── INTERNAL LINKING ────────────────────────────────────────────────────────
+def _related_candidates(existing: list[dict], country: str, category: str, limit: int = 8) -> list[dict]:
+    """Rank link targets: same country (+2) and/or category (+1) first, then fall
+    back to any other published article so even a brand-new country/category still
+    gets the full 3-5 internal links. Stable sort keeps deterministic ordering."""
+    scored = []
+    for a in existing:
+        score = 0
+        if a["country"].lower() == country.lower():
+            score += 2
+        if a["category"].lower() == category.lower():
+            score += 1
+        scored.append((score, a))
+    scored.sort(key=lambda x: -x[0])
+    return [a for _, a in scored[:limit]]
+
+
+def _anchor_keywords(cand: dict) -> list[str]:
+    """Ordered candidate anchor phrases from a related title (specific first)."""
+    words = re.findall(r"[A-Za-z][A-Za-z-]+", cand.get("title", ""))
+    sig = [w for w in words if w.lower() not in _STOP and w.lower() not in _GENERIC and len(w) > 3]
+    out = [f"{sig[i]} {sig[i + 1]}" for i in range(len(sig) - 1)]      # bigrams
+    out += sorted(set(sig), key=len, reverse=True)                     # then long unigrams
+    return out
+
+
+def insert_internal_links(article: dict, related: list[dict], target: int = 4, max_links: int = 5) -> int:
+    """Insert 3-5 contextual /blog/<slug> links into section bodies. First tries
+    to wrap a matching keyword; falls back to a natural 'see also' sentence."""
+    sections = article.get("sections", [])
+    if not sections:
+        return 0
+    used = set()
+    count = 0
+    for cand in related:
+        if count >= max_links:
+            break
+        if cand["slug"] in used:
+            continue
+        placed = False
+        for kw in _anchor_keywords(cand):
+            pat = re.compile(r"(?<![\w/\[\]])(" + re.escape(kw) + r")(?![\w\]])", re.IGNORECASE)
+            for s in sections:
+                body = s.get("body", "")
+                if body.count("](/blog/") >= 2:
+                    continue
+                if f"](/blog/{cand['slug']})" in body:
+                    placed = True
+                    break
+                m = pat.search(body)
+                if m:
+                    anchor = m.group(1)
+                    s["body"] = body[:m.start()] + f"[{anchor}](/blog/{cand['slug']})" + body[m.end():]
+                    used.add(cand["slug"])
+                    count += 1
+                    placed = True
+                    break
+            if placed:
+                break
+    # Fallback: natural 'see also' sentences spread across mid sections.
+    if count < target:
+        idx = max(0, len(sections) // 2 - 1)
+        for cand in related:
+            if count >= target:
+                break
+            if cand["slug"] in used:
+                continue
+            s = sections[min(idx, len(sections) - 1)]
+            s["body"] = s.get("body", "").rstrip() + f" For related guidance, see [{cand['title']}](/blog/{cand['slug']})."
+            used.add(cand["slug"])
+            count += 1
+            idx += 1
+    return count
+
+
+# ─── PRODUCE ONE ARTICLE (shared by live + dry-run) ──────────────────────────
+async def produce_article(country: str, category: str, existing: list[dict]) -> dict | None:
+    existing_titles = [a["title"] for a in existing if a["country"].lower() == country.lower()]
+    existing_norm = {(a["country"].lower(), a["normalizedTopic"]) for a in existing if a["normalizedTopic"]}
+    existing_slugs = {a["slug"] for a in existing}
+
+    # 1. Propose a fresh, non-duplicate title.
+    title = None
+    for _ in range(4):
+        t = await propose_title(country, category, existing_titles)
+        if not t:
+            continue
+        if (country.lower(), _normalize_topic(t)) in existing_norm:
+            existing_titles.append(t)  # exclude on next attempt
+            continue
+        title = t
+        break
+    if not title:
+        print(f"  ⏭ No fresh title for {country} · {category} — skipping")
+        return None
+    norm = _normalize_topic(title)
+
+    # 2. Generate with the word-count floor enforced.
+    article = await generate_with_minwords(title, country, category)
+    if not article:
+        return None
+    article["title"] = article.get("title") or title
+
+    # 3. Slug (word-boundary truncation + collision-safe).
+    slug = _dedupe_slug(_clean_slug(article["title"]), existing_slugs)
+    article["slug"] = slug
+    article["country"] = country
+    article["category"] = category
+    article["legalArea"] = category
+
+    # 4. Internal links.
+    related = _related_candidates(existing, country, category)
+    nlinks = insert_internal_links(article, related)
+
+    wc = _article_wordcount(article)
     return {
-        "title":         f"{post['title'][:55]} — Legal Guide 2026",
-        "metaDescription": f"Complete legal guide: {post['title'][:80]}. Expert AI analysis for {post['country']} by LitigaForge.",
-        "slug":          slug,
-        "readTime":      "7 min read",
-        "country":       post["country"],
-        "legalArea":     post.get("legalArea", "Employment Law"),
-        "intro":         f"This is one of the most common legal questions in {post['country']}. Here is exactly what the law says and what your rights are.",
-        "sections": [
-            {
-                "h2":          "What the Law Says",
-                "body":        f"Under the relevant statutes in {post['country']}, employees and employers have specific rights and obligations. The key legislation governing this situation provides clear protections and procedures that must be followed...",
-                "keyTakeaway": "Always understand which specific law applies before taking action."
-            },
-            {
-                "h2":          "Your Rights in This Situation",
-                "body":        "You have several legal protections available. Courts have consistently ruled in favour of individuals who follow the correct legal procedures and document everything in writing...",
-                "keyTakeaway": "Document all communications in writing immediately."
-            },
-            {
-                "h2":          "Step-by-Step: What To Do Now",
-                "body":        "Follow these steps: First, gather all evidence. Second, calculate the exact amount or obligation. Third, send a formal written notice. Fourth, if unresolved, file with the appropriate tribunal or court...",
-                "keyTakeaway": "Act within limitation periods — usually 1 to 3 years."
-            },
-            {
-                "h2":          "Common Mistakes to Avoid",
-                "body":        "Many people weaken their legal position by waiting too long, not documenting communications, or accepting verbal assurances. Limitation periods are strictly enforced...",
-                "keyTakeaway": "Never accept verbal promises — get everything in writing."
-            },
-            {
-                "h2":          "How LitigaForge AI Helps",
-                "body":        "LitigaForge AI analyses your specific contract or situation in seconds, identifies the exact legal clauses that apply, generates the correct legal notice automatically, and connects you with verified advocates when needed...",
-                "keyTakeaway": "Get your free AI legal analysis at litigaforge.com in 60 seconds."
-            }
-        ],
-        "faq": [
-            {"q": f"Is this legal in {post['country']}?",      "a": "It depends on your specific circumstances. LitigaForge AI can analyse your exact situation and give you a definitive answer in seconds."},
-            {"q": "What is the time limit to take action?",    "a": "Generally 1 to 3 years depending on the claim type. Acting sooner is always better as evidence is fresher."},
-            {"q": "Do I need a lawyer?",                       "a": "For straightforward cases, LitigaForge AI handles drafting and analysis. For complex disputes, we connect you with a verified advocate."},
-            {"q": "How much does it cost to take legal action?","a": "Costs vary. LitigaForge AI provides a free initial analysis so you know your options before spending anything."},
-        ],
-        "cta":          "Get your free AI legal analysis at litigaforge.com — results in 60 seconds.",
-        "tags":         [post["country"], "legal rights", "2026", "employment law", "LitigaForge"],
-        "internalLink": "Legal Notice Generator"
+        "article": article,
+        "slug": slug,
+        "country": country,
+        "category": category,
+        "normalizedTopic": norm,
+        "wordcount": wc,
+        "links": nlinks,
     }
 
 
-# ─── STEP 3: BUILD MARKDOWN ──────────────────────────────────────────────────
-def build_markdown(article: dict, post: dict) -> str:
+# ─── BUILD MARKDOWN ──────────────────────────────────────────────────────────
+def build_markdown(meta: dict) -> str:
+    article = meta["article"]
+    now = datetime.now(timezone.utc).isoformat()
+    slug = meta["slug"]
+
     sections_md = "\n\n".join(
-        f"## {s['h2']}\n\n{s['body']}\n\n> **Key takeaway:** {s['keyTakeaway']}"
+        f"## {s.get('h2', '')}\n\n{s.get('body', '')}\n\n> **Key takeaway:** {s.get('keyTakeaway', '')}"
         for s in article.get("sections", [])
     )
-    faq_md = "\n\n".join(
-        f"### {f['q']}\n\n{f['a']}"
-        for f in article.get("faq", [])
-    )
-    tags_str = ", ".join(f'"{t}"' for t in article.get("tags", []))
-    now = datetime.now(timezone.utc).isoformat()
+    faq_md = "\n\n".join(f"### {f['q']}\n\n{f['a']}" for f in article.get("faq", []))
 
-    return f"""---
-title: "{article['title']}"
-description: "{article['metaDescription']}"
-slug: "{article['slug']}"
-date: "{now}"
-country: "{article['country']}"
-legalArea: "{article['legalArea']}"
-tags: [{tags_str}]
-readTime: "{article['readTime']}"
-author: "LitigaForge AI Editorial Team"
-authorUrl: "https://litigaforge.com/about"
-canonicalUrl: "https://{BLOG_DOMAIN}/blog/{article['slug']}"
-schema: "FAQPage"
----
+    # Front-matter values are JSON-encoded — JSON is valid YAML, so this is robust
+    # against quotes, colons and unicode in titles / FAQ answers without PyYAML.
+    fm = {
+        "title": article["title"],
+        "description": article.get("metaDescription", ""),
+        "slug": slug,
+        "date": now,
+        "dateModified": now,
+        "country": meta["country"],
+        "legalArea": meta["category"],
+        "category": meta["category"],
+        "tags": article.get("tags", []),
+        "readTime": article.get("readTime", "7 min read"),
+        "wordCount": meta["wordcount"],
+        "normalizedTopic": meta["normalizedTopic"],
+        "author": "LitigaForge AI Editorial Team",
+        "authorUrl": f"https://{SITE_DOMAIN}/about",
+        "canonicalUrl": f"https://{SITE_DOMAIN}/blog/{slug}",
+        "schema": "FAQPage",
+        "faq": article.get("faq", []),
+    }
+    front = "---\n" + "\n".join(f"{k}: {json.dumps(v, ensure_ascii=False)}" for k, v in fm.items()) + "\n---"
+
+    return f"""{front}
 
 # {article['title']}
 
-{article['intro']}
+{article.get('intro', '')}
 
 {sections_md}
 
@@ -569,201 +680,223 @@ schema: "FAQPage"
 
 ---
 
-*{article['cta']}*
+*{article.get('cta', 'Get your free AI legal analysis at litigaforge.com.')}*
 
-**Related LitigaForge feature:** [{article.get('internalLink', 'AI Legal Analysis')}](https://{BLOG_DOMAIN})
+**Try it free:** [LitigaForge AI Legal Analysis](https://{SITE_DOMAIN})
 
 <!-- auto-published by LitigaForge Content Pipeline -->
-<!-- source: {post['subreddit']} | score: {post['score']} | upvotes: {post['upvotes']} -->
+<!-- {meta['country']} · {meta['category']} · {meta['wordcount']} words · {meta['links']} internal links -->
 <!-- generated: {now} -->
 """
 
 
-# ─── STEP 4: PUSH TO GITHUB ──────────────────────────────────────────────────
+# ─── GITHUB + INDEXNOW ───────────────────────────────────────────────────────
 async def push_to_github(slug: str, content: str) -> bool:
-    """
-    GitHub Contents API — creates or updates a file.
-    Cloudflare Pages auto-deploys on every push.
-    Falls back to local write if GitHub API is unavailable.
-    """
     path = f"src/content/blog/{slug}.md"
-
     if not GITHUB_TOKEN:
         print("  ⚠ No GITHUB_TOKEN — writing locally")
         _write_local(path, content)
         return False
 
-    encoded  = base64.b64encode(content.encode("utf-8")).decode("utf-8")
-    api_url  = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{path}"
-    # Use Bearer for auto-generated GITHUB_TOKEN; token works for classic PATs
-    auth_prefix = "Bearer" if GITHUB_TOKEN.startswith("ghs_") or GITHUB_TOKEN.startswith("ghp_") else "token"
-    headers  = {
+    encoded = base64.b64encode(content.encode("utf-8")).decode("utf-8")
+    api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{path}"
+    auth_prefix = "Bearer" if GITHUB_TOKEN.startswith(("ghs_", "ghp_")) else "token"
+    headers = {
         "Authorization": f"{auth_prefix} {GITHUB_TOKEN}",
-        "Accept":        "application/vnd.github.v3+json",
-        "User-Agent":    "LitigaForgeBot/1.0"
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "LitigaForgeBot/1.0",
     }
-
     async with httpx.AsyncClient(timeout=30) as client:
         sha = None
         check = await client.get(api_url, headers=headers)
         if check.status_code == 200:
             sha = check.json().get("sha")
-
         payload = {
-            "message":   f"content: auto-publish '{slug}'",
-            "content":   encoded,
-            "committer": {"name": "LitigaForge Bot", "email": "bot@litigaforge.com"}
+            "message": f"content: auto-publish '{slug}'",
+            "content": encoded,
+            "committer": {"name": "LitigaForge Bot", "email": "bot@litigaforge.com"},
         }
         if sha:
             payload["sha"] = sha
-
         r = await client.put(api_url, headers=headers, json=payload)
-
         if r.status_code in (200, 201):
             print(f"  ✓ GitHub commit: {path}")
             return True
-        else:
-            err = r.json().get("message", "Unknown error")
-            print(f"  ✗ GitHub error {r.status_code}: {err}")
-            print("  ⚠ Writing locally instead")
-            _write_local(path, content)
-            return False
+        err = r.json().get("message", "Unknown error")
+        print(f"  ✗ GitHub error {r.status_code}: {err} — writing locally")
+        _write_local(path, content)
+        return False
 
 
 def _write_local(path: str, content: str):
-    """Write file locally when GitHub API is unavailable."""
-    full_path = os.path.join(".", path)
-    os.makedirs(os.path.dirname(full_path), exist_ok=True)
-    with open(full_path, "w") as f:
+    full = os.path.join(".", path)
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    with open(full, "w", encoding="utf-8") as f:
         f.write(content)
     print(f"  ✓ Local write: {path}")
 
 
-# ─── STEP 5: SUBMIT TO INDEXNOW ──────────────────────────────────────────────
 async def submit_indexnow(slug: str) -> bool:
-    """
-    IndexNow — free, instant Bing + Yandex indexing.
-    Google follows within 24-48hrs via sitemap.
-    Key file must exist at: {INDEXNOW_KEY}.txt at the root
-    """
     if not INDEXNOW_KEY:
-        print("  ⚠ No INDEXNOW_KEY — skipping IndexNow submission")
         return False
-
-    live_url = f"https://{BLOG_DOMAIN}/blog/{slug}"
-
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.post(
-            "https://api.indexnow.org/indexnow",
-            json={
-                "host":        BLOG_DOMAIN,
-                "key":         INDEXNOW_KEY,
-                "keyLocation": f"https://{BLOG_DOMAIN}/{INDEXNOW_KEY}.txt",
-                "urlList":     [live_url]
-            },
-            headers={"Content-Type": "application/json"}
-        )
-
-    if r.status_code in (200, 202):
-        print(f"  ✓ IndexNow submitted: {live_url}")
-        return True
-    else:
+    live_url = f"https://{SITE_DOMAIN}/blog/{slug}"
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(
+                "https://api.indexnow.org/indexnow",
+                json={
+                    "host": SITE_DOMAIN,
+                    "key": INDEXNOW_KEY,
+                    "keyLocation": f"https://{SITE_DOMAIN}/{INDEXNOW_KEY}.txt",
+                    "urlList": [live_url],
+                },
+                headers={"Content-Type": "application/json"},
+            )
+        if r.status_code in (200, 202):
+            print(f"  ✓ IndexNow submitted: {live_url}")
+            return True
         print(f"  ⚠ IndexNow returned {r.status_code}")
-        return False
+    except Exception as e:
+        print(f"  ⚠ IndexNow error: {e}")
+    return False
 
 
-# ─── MAIN ────────────────────────────────────────────────────────────────────
+# ─── PUBLISHED-SLUG CACHE (workflow artifact compatibility) ──────────────────
+def load_published() -> set:
+    try:
+        with open(PUBLISHED_FILE) as f:
+            return set(json.load(f))
+    except Exception:
+        return set()
+
+
+def save_published(slugs: set):
+    try:
+        with open(PUBLISHED_FILE, "w") as f:
+            json.dump(sorted(slugs), f)
+    except OSError:
+        pass
+
+
+def _to_index(meta: dict) -> dict:
+    """Convert a freshly produced article into the existing-index shape so later
+    articles in the same run dedup/relate against it."""
+    return {
+        "slug": meta["slug"],
+        "title": meta["article"]["title"],
+        "country": meta["country"],
+        "category": meta["category"],
+        "legalArea": meta["category"],
+        "normalizedTopic": meta["normalizedTopic"],
+        "date_ist": datetime.now(IST).date(),
+        "date_raw": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# ─── DRY RUN (item 16 — generate 5 samples, write nothing) ───────────────────
+DRY_RUN_SLOTS = [
+    ("India", "Criminal Law"),
+    ("Canada", "Immigration Law"),
+    ("Singapore", "Business & Startup Law"),
+    ("UAE", "Family Law"),
+    ("Germany", "Tax & Finance Law"),
+]
+
+
+async def dry_run():
+    print("\n" + "=" * 60)
+    print("  DRY RUN — generating 5 sample articles")
+    print("  NOTHING will be saved, committed, or deployed")
+    print("=" * 60)
+    existing = _load_existing_articles()
+    in_run = []
+    results = []
+    for i, (country, category) in enumerate(DRY_RUN_SLOTS, 1):
+        print(f"\n[{i}/5] {country} · {category} ...")
+        meta = await produce_article(country, category, existing + in_run)
+        if not meta:
+            print("  ✗ generation failed for this slot")
+            continue
+        results.append(meta)
+        in_run.append(_to_index(meta))
+        await asyncio.sleep(2)
+
+    print("\n" + "=" * 60)
+    print(f"  DRY-RUN REPORT — {len(results)}/5 articles produced")
+    print("=" * 60)
+    for i, m in enumerate(results, 1):
+        a = m["article"]
+        ok = "✓" if m["wordcount"] >= MIN_WORDS else "✗"
+        print(f"\n── Article {i} ─────────────────────────────────────────────")
+        print(f"  Title          : {a['title']}")
+        print(f"  Slug           : {m['slug']}  ({len(m['slug'])} chars)")
+        print(f"  Country        : {m['country']}")
+        print(f"  Category       : {m['category']}")
+        print(f"  Word count     : {m['wordcount']}  (min {MIN_WORDS} {ok})")
+        print(f"  Internal links : {m['links']}")
+        print(f"  Featured image : skipped (per spec — no images)")
+        print(f"  Meta desc      : {a.get('metaDescription', '')}")
+        faqs = a.get("faq", [])[:5]
+        print(f"  FAQ ({len(faqs)}):")
+        for q in faqs:
+            print(f"    • {q.get('q', '')}")
+    print("\n" + "=" * 60)
+    print("  End of dry run. Review above, then approve to go live.")
+    print("=" * 60 + "\n")
+
+
+# ─── MAIN (live) ─────────────────────────────────────────────────────────────
 async def main():
-    print("\n" + "="*55)
-    print(f"  LitigaForge Content Pipeline")
-    print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
-    print("="*55)
+    print("\n" + "=" * 55)
+    print("  LitigaForge Content Pipeline")
+    print(f"  {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    print("=" * 55)
 
-    # Check at least one AI key exists
     if not GEMINI_API_KEY and not GROQ_API_KEY:
-        print("❌ FATAL: Set GEMINI_API_KEY or GROQ_API_KEY in GitHub Secrets")
+        print("❌ FATAL: set GEMINI_API_KEY or GROQ_API_KEY")
         return
 
-    published_slugs = load_published()
-    print(f"📚 Already published: {len(published_slugs)} articles\n")
-
-    # Step 1: Choose topics — clusters first (topical authority), then Reddit.
-    # Fill ~CLUSTER_MIN_POSTS related guides per (country, legalArea) cluster
-    # before moving on; once every cluster is full, switch to Reddit trending.
-    print("🧭 Step 1: Selecting topics (cluster-first)...")
-    posts = decide_cluster_topics(MAX_ARTICLES)
-    if posts:
-        print(f"  ✓ Cluster mode: {len(posts)} guide(s) queued")
-    else:
-        print("📡 Falling back to Reddit trending posts...")
-        posts = await fetch_reddit_posts()
-
-    if not posts:
-        print("No qualifying posts found this run.")
+    if DRY_RUN:
+        await dry_run()
         return
 
-    # Step 2–5: Pipeline for top N posts
-    published_count = 0
-    for post in posts:
-        if published_count >= MAX_ARTICLES:
-            break
+    if not GENERATION_ENABLED:
+        print("⏸  GENERATION_ENABLED is false — pipeline paused, no articles generated.")
+        return
 
-        if post["score"] < SCORE_THRESHOLD:
-            print(f"\n⏭  Skipping (score {post['score']} < {SCORE_THRESHOLD}): {post['title'][:50]}")
+    existing = _load_existing_articles()
+    print(f"📚 Published to date: {len(existing)} articles")
+
+    slots = decide_slots(PER_RUN_MAX, existing)
+    if not slots:
+        print("Nothing to publish this run.")
+        return
+    print(f"🧭 Slots this run: " + ", ".join(f"{s['country']}·{s['category']}" for s in slots))
+
+    in_run = []
+    published = 0
+    for slot in slots:
+        print(f"\n{'─' * 55}\n🚀 {slot['country']} · {slot['category']}")
+        meta = await produce_article(slot["country"], slot["category"], existing + in_run)
+        if not meta:
             continue
-
-        print(f"\n{'─'*55}")
-        print(f"🚀 Processing post (score: {post['score']}):")
-        print(f"   {post['title'][:65]}")
-        print(f"   {post['subreddit']} • {post['country']} • ▲{post['upvotes']} • 💬{post['comments']}")
-
-        # Step 2: Generate article
-        print("\n📝 Step 2: Generating article...")
-        try:
-            article = await generate_article(post)
-        except Exception as e:
-            print(f"  ✗ Article generation failed: {e}")
-            continue
-
-        slug = article.get("slug", "")
-        if not slug:
-            print("  ✗ No slug generated — skipping")
-            continue
-
-        if slug in published_slugs:
-            print(f"  ⏭  Already published: {slug}")
-            continue
-
-        # Step 3: Build markdown
-        print("\n📄 Step 3: Building markdown...")
-        md = build_markdown(article, post)
-        print(f"  ✓ Markdown built: {len(md)} chars")
-
-        # Step 4: Push to GitHub
-        print("\n🐙 Step 4: Pushing to GitHub...")
-        github_ok = await push_to_github(slug, md)
-
-        # Step 5: Submit to IndexNow
-        print("\n🔗 Step 5: Submitting to IndexNow...")
-        indexnow_ok = await submit_indexnow(slug)
-
-        # Record as published
-        published_slugs.add(slug)
-        save_published(published_slugs)
-        published_count += 1
-
-        print(f"\n✅ DONE: https://{BLOG_DOMAIN}/blog/{slug}")
-        print(f"   GitHub: {'✓' if github_ok else '✗'}  |  IndexNow: {'✓' if indexnow_ok else '✗'}")
-        print(f"   Cloudflare Pages deploys automatically in ~45s")
-
-        # Pause between articles to avoid rate limits
-        if published_count < MAX_ARTICLES:
+        md = build_markdown(meta)
+        print(f"  📄 Markdown: {len(md)} chars · {meta['wordcount']} words · {meta['links']} links")
+        await push_to_github(meta["slug"], md)
+        await submit_indexnow(meta["slug"])
+        in_run.append(_to_index(meta))
+        published += 1
+        print(f"  ✅ https://{SITE_DOMAIN}/blog/{meta['slug']}")
+        if published < len(slots):
             await asyncio.sleep(5)
 
-    print(f"\n{'='*55}")
-    print(f"  Pipeline complete — {published_count} articles published")
-    print(f"  Total published to date: {len(published_slugs)}")
-    print("="*55 + "\n")
+    if in_run:
+        save_published({a["slug"] for a in existing} | {m["slug"] for m in in_run})
+
+    print(f"\n{'=' * 55}")
+    print(f"  Pipeline complete — {published} article(s) published")
+    print(f"  Total to date: {len(existing) + published}")
+    print("=" * 55 + "\n")
 
 
 if __name__ == "__main__":

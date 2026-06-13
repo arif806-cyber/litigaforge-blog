@@ -12,7 +12,7 @@ on:
       max_articles:
         description: 'Max articles to publish this run'
         required: false
-        default: '3'
+        default: '2'
 
 # ─── JOB ─────────────────────────────────────────────────
 jobs:
@@ -61,14 +61,20 @@ jobs:
       # 5. Run the pipeline (commits new articles to GitHub via Contents API)
       - name: Run content pipeline
         env:
-          GEMINI_API_KEY:  ${{ secrets.GEMINI_API_KEY }}
-          GROQ_API_KEY:    ${{ secrets.GROQ_API_KEY }}
-          GITHUB_TOKEN:    ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPO:     ${{ github.repository }}
-          INDEXNOW_KEY:    ${{ secrets.INDEXNOW_KEY }}
-          BLOG_DOMAIN:     ${{ secrets.BLOG_DOMAIN || 'blog.litigaforge.com' }}
-          SCORE_THRESHOLD: "60"
-          MAX_ARTICLES:    ${{ github.event.inputs.max_articles || '3' }}
+          GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY:       ${{ secrets.GROQ_API_KEY }}
+          GITHUB_TOKEN:       ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO:        ${{ github.repository }}
+          INDEXNOW_KEY:       ${{ secrets.INDEXNOW_KEY }}
+          BLOG_DOMAIN:        ${{ secrets.BLOG_DOMAIN || 'blog.litigaforge.com' }}
+          SITE_DOMAIN:        ${{ secrets.SITE_DOMAIN || 'litigaforge.com' }}
+          # Kill switch — FAIL CLOSED. Generation runs only when the repo
+          # variable GENERATION_ENABLED is "true"; default (unset) keeps it
+          # paused so no unapproved content is ever published. Set the repo
+          # variable GENERATION_ENABLED=true to go live.
+          GENERATION_ENABLED: ${{ vars.GENERATION_ENABLED || 'false' }}
+          DAILY_TARGET:       "7"
+          MAX_ARTICLES:       ${{ github.event.inputs.max_articles || '2' }}
         run: python pipeline.py
 
       # 6. Save updated published slugs

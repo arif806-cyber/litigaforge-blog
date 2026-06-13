@@ -15,16 +15,27 @@ export async function getStaticPaths() {
 const { post } = Astro.props;
 const { Content } = await post.render();
 
-// Build FAQ schema for Google rich results
+// Build FAQ schema for Google rich results. Only emit it when the post actually
+// has FAQs — an empty FAQPage (legacy posts with faq: []) is an invalid rich
+// result and can trigger Search Console warnings.
+const faqItems = post.data.faq || [];
+const hasFaq = faqItems.length > 0;
 const faqSchema = {
   "@context": "https://schema.org",
   "@type": "FAQPage",
-  "mainEntity": (post.data.faq || []).map(f => ({
+  "mainEntity": faqItems.map(f => ({
     "@type": "Question",
     "name": f.q,
     "acceptedAnswer": { "@type": "Answer", "text": f.a }
   }))
 };
+
+// Truncate ONLY the HTML <title> tag to keep it under ~60 chars (the H1 below
+// always uses the full title). Google rewrites long <title>s, so we trim here
+// while preserving the complete, descriptive headline everywhere else.
+const metaTitle = post.data.title.length > 60
+  ? post.data.title.slice(0, 57).trimEnd() + "…"
+  : post.data.title;
 
 const articleSchema = {
   "@context": "https://schema.org",
@@ -32,6 +43,10 @@ const articleSchema = {
   "headline": post.data.title,
   "description": post.data.description,
   "datePublished": post.data.date,
+  "dateModified": post.data.dateModified || post.data.date,
+  "mainEntityOfPage": { "@type": "WebPage", "@id": `https://litigaforge.com/blog/${post.slug}` },
+  ...(post.data.wordCount ? { "wordCount": post.data.wordCount } : {}),
+  "inLanguage": "en",
   "author": { "@type": "Organization", "name": "LitigaForge AI", "url": "https://litigaforge.com" },
   "publisher": { "@type": "Organization", "name": "LitigaForge AI", "logo": { "@type": "ImageObject", "url": "https://litigaforge.com/logo.png" } }
 };
@@ -64,7 +79,7 @@ const related = allPosts
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>{post.data.title} | LitigaForge AI</title>
+  <title>{metaTitle} | LitigaForge AI</title>
   <meta name="description" content={post.data.description} />
   <link rel="canonical" href={`https://litigaforge.com/blog/${post.slug}`} />
 
@@ -82,7 +97,7 @@ const related = allPosts
 
   <!-- Schema.org -->
   <script type="application/ld+json" set:html={JSON.stringify(articleSchema)} />
-  <script type="application/ld+json" set:html={JSON.stringify(faqSchema)} />
+  {hasFaq && <script type="application/ld+json" set:html={JSON.stringify(faqSchema)} />}
 
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
