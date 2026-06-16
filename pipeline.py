@@ -47,6 +47,15 @@ MIN_WORDS    = int(os.environ.get("MIN_WORDS", "1500"))
 # of headroom so the JSON is never truncated mid-string (which is unparseable).
 ARTICLE_MAX_TOKENS = int(os.environ.get("ARTICLE_MAX_TOKENS", "24000"))
 
+# Hard upper bound for published titles (chars). Enforced with a word-boundary
+# trim — titles are never cut mid-word. 80 chars is a comfortable ceiling that
+# stays inside the 70-char Google SERP truncation point.
+TITLE_MAX_CHARS = int(os.environ.get("TITLE_MAX_CHARS", "80"))
+# Jaccard similarity threshold for near-duplicate detection (0–1). Two articles
+# sharing ≥ this fraction of normalised topic tokens are considered duplicates;
+# the newer one is skipped. 0.55 = moderate strictness (catches paraphrases).
+DEDUP_THRESHOLD = float(os.environ.get("DEDUP_THRESHOLD", "0.55"))
+
 # Kill switch — FAIL CLOSED. Generation only runs when GENERATION_ENABLED is
 # explicitly truthy. A missing/empty/unknown value keeps the pipeline PAUSED so
 # a scheduled, manual, or VM-dispatched run can never publish unapproved content.
@@ -110,6 +119,47 @@ _GENERIC = set("law laws legal rights guide rules act explained complete need kn
 
 
 # ─── FRONT-MATTER + EXISTING-ARTICLE INDEX ───────────────────────────────────
+
+# ─── TITLE & TOPIC QUALITY HELPERS ────────────────────────────────────────────
+def _cap_title(title: str, maxlen: int = TITLE_MAX_CHARS) -> str:
+    """Trim title to at most maxlen chars at a word boundary. A clean cut is
+    preferred over an ellipsis for SEO title tags. Returns the original string
+    unchanged when it is already within the limit."""
+    title = (title or "").strip()
+    if len(title) <= maxlen:
+        return title
+    cut = title[:maxlen]
+    last_space = cut.rfind(" ")
+    # Prefer a word-boundary cut unless it would remove more than half the title.
+    if last_space > maxlen // 3:
+        cut = cut[:last_space]
+    return cut.rstrip(",;: ").strip()
+
+
+def _jaccard(s1: set, s2: set) -> float:
+    """Jaccard similarity between two token sets (0.0 when both are empty)."""
+    union = s1 | s2
+    return len(s1 & s2) / len(union) if union else 0.0
+
+
+def _is_near_duplicate(norm: str, country: str, existing: list[dict]) -> bool:
+    """Return True when *norm* (a _normalize_topic key) is too similar to any
+    existing article from the same country. Catches both exact matches
+    (Jaccard == 1.0) and paraphrases (Jaccard >= DEDUP_THRESHOLD) so the blog
+    does not accumulate near-identical posts under different slugs."""
+    tokens = set(norm.split())
+    if not tokens:
+        return False
+    for a in existing:
+        if a.get("country", "").lower() != country:
+            continue
+        other = set((a.get("normalizedTopic") or "").split())
+        if not other:
+            continue
+        if _jaccard(tokens, other) >= DEDUP_THRESHOLD:
+            return True
+    return False
+
 def _read_frontmatter(path: str) -> dict:
     """Minimal front-matter reader. Values are JSON-encoded (see build_markdown),
     so we json.loads each value and fall back to a stripped string."""
@@ -394,7 +444,7 @@ async def propose_title(country: str, category: str, existing_titles: list[str])
     if not raw:
         return None
     line = raw.strip().splitlines()[0].strip().strip('"').strip("#").strip()
-    return line[:120] if line else None
+    return _cap_title(line) if line else None
 
 
 # ─── ARTICLE GENERATION ──────────────────────────────────────────────────────
@@ -408,7 +458,7 @@ Category: {category}
 Return ONLY valid JSON — no markdown fences, no preamble, no explanation:
 
 {{
-  "title": "Specific, descriptive SEO H1 — include the country and the year 2026 (aim 50-75 characters)",
+  "title": "Specific, descriptive SEO H1 — include the country and the year 2026 (aim 55-70 characters, hard maximum 80)",
   "metaDescription": "Meta description, max 155 chars, include the primary keyword",
   "readTime": "X min read",
   "intro": "2-3 sentence hook that directly answers the core question",
@@ -581,17 +631,20 @@ def insert_internal_links(article: dict, related: list[dict], target: int = 4, m
 # ─── PRODUCE ONE ARTICLE (shared by live + dry-run) ──────────────────────────
 async def produce_article(country: str, category: str, existing: list[dict]) -> dict | None:
     existing_titles = [a["title"] for a in existing if a["country"].lower() == country.lower()]
-    existing_norm = {(a["country"].lower(), a["normalizedTopic"]) for a in existing if a["normalizedTopic"]}
     existing_slugs = {a["slug"] for a in existing}
 
     # 1. Propose a fresh, non-duplicate title.
+    # Uses near-duplicate detection (Jaccard similarity on normalised tokens)
+    # rather than an exact key match, so paraphrased topics are also rejected.
     title = None
     for _ in range(4):
         t = await propose_title(country, category, existing_titles)
         if not t:
             continue
-        if (country.lower(), _normalize_topic(t)) in existing_norm:
-            existing_titles.append(t)  # exclude on next attempt
+        norm_t = _normalize_topic(t)
+        if _is_near_duplicate(norm_t, country.lower(), existing):
+            print(f"  ↩ Near-duplicate title rejected ({DEDUP_THRESHOLD:.0%} overlap): {t[:60]}")
+            existing_titles.append(t)  # show the model what to avoid next time
             continue
         title = t
         break
@@ -604,7 +657,8 @@ async def produce_article(country: str, category: str, existing: list[dict]) -> 
     article = await generate_with_minwords(title, country, category)
     if not article:
         return None
-    article["title"] = article.get("title") or title
+    # Enforce hard title-length cap (word-boundary trim, no ellipsis).
+    article["title"] = _cap_title(article.get("title") or title)
 
     # 3. Slug (word-boundary truncation + collision-safe).
     slug = _dedupe_slug(_clean_slug(article["title"]), existing_slugs)
