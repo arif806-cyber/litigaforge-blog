@@ -3,8 +3,8 @@ name: LitigaForge Content Pipeline
 # ─── TRIGGERS ────────────────────────────────────────────
 on:
   schedule:
-    # Runs every 2 hours — uses ~36 min/day of GitHub's free minutes
-    - cron: '17 */2 * * *'  # off-peak minute -- GitHub drops many ':00' scheduled runs
+    # Runs every 2 hours — uses ~36 min/day of GitHub's 2,000 free minutes
+    - cron: '0 */2 * * *'
 
   # Manual trigger from GitHub Actions UI
   workflow_dispatch:
@@ -12,7 +12,7 @@ on:
       max_articles:
         description: 'Max articles to publish this run'
         required: false
-        default: '2'
+        default: '3'
 
 # ─── JOB ─────────────────────────────────────────────────
 jobs:
@@ -35,7 +35,7 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_PERSONAL_ACCESS_TOKEN_NOEXPIRE || secrets.GITHUB_TOKEN }}
           fetch-depth: 1
 
       # 2. Set up Python
@@ -58,23 +58,17 @@ jobs:
           restore-keys: |
             published-slugs-
 
-      # 5. Run the pipeline (commits new articles to GitHub via Contents API)
+      # 5. Run the pipeline
       - name: Run content pipeline
         env:
-          GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
-          GROQ_API_KEY:       ${{ secrets.GROQ_API_KEY }}
-          GITHUB_TOKEN:       ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPO:        ${{ github.repository }}
-          INDEXNOW_KEY:       ${{ secrets.INDEXNOW_KEY }}
-          BLOG_DOMAIN:        ${{ secrets.BLOG_DOMAIN || 'blog.litigaforge.com' }}
-          SITE_DOMAIN:        ${{ secrets.SITE_DOMAIN || 'litigaforge.com' }}
-          # Kill switch — FAIL CLOSED. Generation runs only when the repo
-          # variable GENERATION_ENABLED is "true"; default (unset) keeps it
-          # paused so no unapproved content is ever published. Set the repo
-          # variable GENERATION_ENABLED=true to go live.
-          GENERATION_ENABLED: ${{ vars.GENERATION_ENABLED || 'false' }}
-          DAILY_TARGET:       "7"
-          MAX_ARTICLES:       ${{ github.event.inputs.max_articles || '2' }}
+          GEMINI_API_KEY:  ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY:    ${{ secrets.GROQ_API_KEY }}
+          GITHUB_TOKEN:    ${{ secrets.GITHUB_PERSONAL_ACCESS_TOKEN_NOEXPIRE || secrets.GITHUB_TOKEN }}
+          GITHUB_REPO:     ${{ github.repository }}
+          INDEXNOW_KEY:    ${{ secrets.INDEXNOW_KEY }}
+          BLOG_DOMAIN:     ${{ secrets.BLOG_DOMAIN || 'blog.litigaforge.com' }}
+          SCORE_THRESHOLD: "60"
+          MAX_ARTICLES:    ${{ github.event.inputs.max_articles || '3' }}
         run: python pipeline.py
 
       # 6. Save updated published slugs
@@ -84,33 +78,7 @@ jobs:
           path: published_slugs.json
           key: published-slugs-${{ github.run_number }}
 
-      # ─── AUTO-DEPLOY TO CLOUDFLARE ───────────────────────
-      # 7. Sync the articles pipeline.py just committed via the API
-      - name: Sync latest commits
-        run: |
-          git fetch origin main
-          git reset --hard origin/main
-
-      # 8. Set up Node for the Astro build
-      - name: Set up Node 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      # 9. Build the static site (dist/ contains every article)
-      - name: Build site
-        run: |
-          npm install --no-audit --no-fund
-          npx astro build
-
-      # 10. Deploy dist/ to the Cloudflare Worker (static assets)
-      - name: Deploy to Cloudflare
-        env:
-          CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler@4 deploy
-
-      # 11. Upload run log as artifact (for debugging)
+      # 7. Upload run log as artifact (for debugging)
       - name: Upload pipeline log
         if: always()
         uses: actions/upload-artifact@v4
