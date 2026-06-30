@@ -26,8 +26,8 @@ GEMINI_API_KEY  = os.environ.get("GEMINI_API_KEY", "")
 GROQ_API_KEY    = os.environ.get("GROQ_API_KEY", "")
 GITHUB_TOKEN    = (
     os.environ.get("GITHUB_TOKEN")
-    or os.environ.get("GITHUB_PERSONAL_ACCESS_TOKEN_NOEXPIRE")
     or os.environ.get("GITHUB_PERSONAL_ACCESS_TOKEN")
+    or os.environ.get("GITHUB_PERSONAL_ACCESS_TOKEN_NOEXPIRE")
     or ""
 )
 GITHUB_REPO     = os.environ.get("GITHUB_REPO", "arif806-cyber/litigaforge-blog")
