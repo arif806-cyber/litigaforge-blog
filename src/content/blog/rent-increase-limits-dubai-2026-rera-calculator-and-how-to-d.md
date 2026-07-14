@@ -2,7 +2,7 @@
 title: "Rent increase limits Dubai 2026: RERA calculator and ho — Legal Guide 2026"
 description: "Complete legal guide: Rent increase limits Dubai 2026: RERA calculator and how to dispute above-cap hi. Expert AI analysis for UAE by LitigaForge."
 slug: "rent-increase-limits-dubai-2026-rera-calculator-and-how-to-d"
-date: "2026-07-14T19:27:14.639385+00:00"
+date: "2026-07-14T23:00:32.614510+00:00"
 country: "UAE"
 legalArea: "Employment Law"
 tags: ["UAE", "legal rights", "2026", "employment law", "LitigaForge"]
@@ -75,4 +75,4 @@ Costs vary. LitigaForge AI provides a free initial analysis so you know your opt
 
 <!-- auto-published by LitigaForge Content Pipeline -->
 <!-- source: r/dubai | score: 307 | upvotes: 480 -->
-<!-- generated: 2026-07-14T19:27:14.639385+00:00 -->
+<!-- generated: 2026-07-14T23:00:32.614510+00:00 -->
