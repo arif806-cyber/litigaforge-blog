@@ -413,7 +413,8 @@ def _get_curated_topics(published_slugs: set | None = None) -> list[dict]:
         if fresh:
             available = fresh
         else:
-            print("  ⚠ All curated topics saturated — using full pool with random selection")
+            print("  ⚠ All curated topics saturated — waiting for fresh topics")
+            return []
 
     random.shuffle(available)
     topics = available[:min(6, len(available))]  # candidate pool of 6, pipeline picks top 3
@@ -501,7 +502,7 @@ async def call_gemini(prompt: str) -> str:
 
 
 async def call_groq(prompt: str) -> str:
-    """Groq Llama 3.3 70B — 14,400 req/day free"""
+    """Groq GPT-OSS 120B"""
     if not GROQ_API_KEY:
         raise ValueError("No GROQ_API_KEY")
 
@@ -513,7 +514,7 @@ async def call_groq(prompt: str) -> str:
                 "Content-Type": "application/json"
             },
             json={
-                "model": "llama-3.3-70b-versatile",
+                "model": "openai/gpt-oss-120b",
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.7,
                 "max_tokens": 4000,
@@ -536,7 +537,7 @@ async def generate_article(post: dict) -> dict:
 
     # Primary: Groq (14,400 req/day, reliable)
     try:
-        print("  🤖 Trying Groq Llama 3.3...")
+        print("  🤖 Trying Groq GPT-OSS 120B...")
         raw = await call_groq(prompt)
         source = "Groq"
     except Exception as e:
