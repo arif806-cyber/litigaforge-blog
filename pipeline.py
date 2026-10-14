@@ -60,6 +60,11 @@ LEGAL_KEYWORDS = [
 PUBLISHED_FILE = "published_slugs.json"
 
 def load_published() -> set:
+    # Source of truth = articles actually in the repo. The old Actions cache also
+    # held slugs whose GitHub push had failed, which made fresh topics look used.
+    blog_dir = os.path.join("src", "content", "blog")
+    if os.path.isdir(blog_dir):
+        return {f[:-3] for f in os.listdir(blog_dir) if f.endswith(".md")}
     try:
         with open(PUBLISHED_FILE) as f:
             return set(json.load(f))
@@ -394,6 +399,50 @@ _CURATED_TOPICS = [
     {"title": "Security deposit dispute Singapore tenancy 2026: small claims tribunal application process", "country": "Singapore", "subreddit": "r/legaladvice", "upvotes": 365, "comments": 67},
     {"title": "PDPA personal data breach Singapore 2026: reporting obligations and PDPC enforcement", "country": "Singapore", "subreddit": "r/legaladvice", "upvotes": 400, "comments": 82},
     {"title": "Online purchase dispute Singapore consumer rights 2026: Consumers Association and chargebacks", "country": "Singapore", "subreddit": "r/legaladvice", "upvotes": 375, "comments": 70},
+
+    # ── INDIA — added Oct 2026: BNS/BNSS/BSA era, civil, property, family, business ──
+    {"title": "Regular bail under BNSS 2023: default bail after 60 or 90 days explained", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Zero FIR under BNSS: filing a complaint at any police station and e-FIR rules", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "What to do if police refuse to register an FIR: Section 173 BNSS and magistrate complaint", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Cheating under Section 318 BNS: what changed from IPC 420 and punishment", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Summary trial under BNSS: which offences qualify and how fast they finish", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Electronic evidence under Bharatiya Sakshya Adhiniyam: WhatsApp chats and certificates", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Plea bargaining under BNSS: eligibility, process and reduced sentence", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Mob lynching and organised crime offences under BNS: what is new", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Community service as punishment under BNS: which petty offences qualify", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Trial in absentia under BNSS: when an absconding accused can be tried", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Hindu Succession Act daughters share in ancestral property: coparcenary rights explained", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Making a valid will in India: registration, witnesses and probate requirement", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Partition suit for joint family property: legal heirs, shares and court process", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Mutation of property after death: transferring land records to legal heirs", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "RERA complaint for delayed flat possession: refund, interest and compensation", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Adverse possession in India: 12 year rule and how to protect vacant land", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Stamp duty and registration on property sale deed: state-wise process overview", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Builder buyer agreement red flags: clauses to check before booking a flat", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Insurance claim rejected in India: IRDAI Bima Bharosa and ombudsman remedies", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Online fraud and UPI scam: reporting to cybercrime portal 1930 and bank liability", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Digital Personal Data Protection Act 2023: rights of individuals and complaints", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Cyber stalking and online harassment of women: BNS offences and remedies", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Legal notice for recovery of money: drafting, sending and next steps", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Summary suit under Order 37 CPC for recovery of debts: when to use it", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Arbitration clause in contracts: invoking arbitration under the 1996 Act", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Commercial courts in India: pre-institution mediation and specified value", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Section 9 IBC application by operational creditors: demand notice and admission", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "MSME delayed payment complaint: Samadhaan portal and interest under MSMED Act", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Trademark registration in India: search, filing, objections and timeline", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Copyright protection for software and content in India: registration and infringement", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Startup founders agreement in India: vesting, IP assignment and exit clauses", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Employee non-compete clauses in India: Section 27 Contract Act enforceability", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "New Labour Codes 2025: wages, gratuity for fixed-term staff and working hours", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Full and final settlement delayed by employer: legal remedies for employees", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Public interest litigation in India: who can file and how to approach High Court", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Writ petition under Article 226: remedies against government action", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Free legal aid in India: NALSA eligibility and how to get a lawyer", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Lok Adalat settlement: which cases qualify and is the award final", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Checking case status by CNR number on eCourts: hearing dates and orders", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Limitation period for civil suits in India: Limitation Act articles explained", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Appeal against conviction in India: time limits under BNSS and suspension of sentence", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
+    {"title": "Senior citizens maintenance tribunal: claiming maintenance and property protection", "country": "India", "subreddit": "curated", "upvotes": 400, "comments": 80},
 ]
 
 
@@ -431,10 +480,11 @@ def _get_curated_topics(published_slugs: set | None = None) -> list[dict]:
 ARTICLE_PROMPT = """You are a senior legal content writer for LitigaForge AI (litigaforge.com).
 LitigaForge is an AI-powered legal platform operating in India, USA, UK, UAE, Germany, Australia, Canada, Singapore.
 
-A Reddit post is trending: "{title}" in {country}.
+Topic: "{title}" ({country}).
 
 Write a comprehensive, SEO-optimized 2000-word legal article that directly answers this question.
-Use real law names, sections, and case references where applicable.
+Use real statute names and section numbers. Do NOT cite case law unless you are certain the case name and citation are real; never invent cases, citations, fees or deadlines.
+For India, criminal law is now the Bharatiya Nyaya Sanhita (BNS), Bharatiya Nagarik Suraksha Sanhita (BNSS) and Bharatiya Sakshya Adhiniyam (BSA), in force from 1 July 2024; cite the new section and give the old IPC/CrPC/Evidence Act section in brackets.
 
 Return ONLY valid JSON — no markdown fences, no preamble, no explanation:
 
@@ -445,7 +495,7 @@ Return ONLY valid JSON — no markdown fences, no preamble, no explanation:
   "readTime": "X min read",
   "country": "{country}",
   "legalArea": "Employment Law | Tenancy | Contract | Consumer | Corporate | Family",
-  "intro": "2-sentence compelling hook that directly addresses the Reddit question",
+  "intro": "2-sentence compelling hook that directly addresses the question",
   "sections": [
     {{
       "h2": "Section heading",
@@ -517,7 +567,11 @@ async def call_groq(prompt: str) -> str:
                 "model": "openai/gpt-oss-120b",
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.7,
-                "max_tokens": 4000,
+                # gpt-oss is a reasoning model: reasoning tokens count toward the limit,
+                # so 4000 cut the 2000-word JSON short. Keep reasoning light, allow room.
+                "max_tokens": 10000,
+                "reasoning_effort": "low",
+                "response_format": {"type": "json_object"},
             }
         )
         data = r.json()
@@ -585,55 +639,8 @@ async def generate_article(post: dict) -> dict:
             except json.JSONDecodeError:
                 pass
 
-    # Last resort: structured fallback template
-    print("  ⚠ Using fallback template")
-    slug = re.sub(r"[^a-z0-9\s-]", "", post["title"].lower())
-    slug = re.sub(r"\s+", "-", slug).strip("-")[:60]
-    return {
-        "title":         f"{post['title'][:55]} — Legal Guide 2026",
-        "metaDescription": f"Complete legal guide: {post['title'][:80]}. Expert AI analysis for {post['country']} by LitigaForge.",
-        "slug":          slug,
-        "readTime":      "7 min read",
-        "country":       post["country"],
-        "legalArea":     "Employment Law",
-        "intro":         f"This is one of the most common legal questions in {post['country']}. Here is exactly what the law says and what your rights are.",
-        "sections": [
-            {
-                "h2":          "What the Law Says",
-                "body":        f"Under the relevant statutes in {post['country']}, employees and employers have specific rights and obligations. The key legislation governing this situation provides clear protections and procedures that must be followed...",
-                "keyTakeaway": "Always understand which specific law applies before taking action."
-            },
-            {
-                "h2":          "Your Rights in This Situation",
-                "body":        "You have several legal protections available. Courts have consistently ruled in favour of individuals who follow the correct legal procedures and document everything in writing...",
-                "keyTakeaway": "Document all communications in writing immediately."
-            },
-            {
-                "h2":          "Step-by-Step: What To Do Now",
-                "body":        "Follow these steps: First, gather all evidence. Second, calculate the exact amount or obligation. Third, send a formal written notice. Fourth, if unresolved, file with the appropriate tribunal or court...",
-                "keyTakeaway": "Act within limitation periods — usually 1 to 3 years."
-            },
-            {
-                "h2":          "Common Mistakes to Avoid",
-                "body":        "Many people weaken their legal position by waiting too long, not documenting communications, or accepting verbal assurances. Limitation periods are strictly enforced...",
-                "keyTakeaway": "Never accept verbal promises — get everything in writing."
-            },
-            {
-                "h2":          "How LitigaForge AI Helps",
-                "body":        "LitigaForge AI analyses your specific contract or situation in seconds, identifies the exact legal clauses that apply, generates the correct legal notice automatically, and connects you with verified advocates when needed...",
-                "keyTakeaway": "Get your free AI legal analysis at litigaforge.com in 60 seconds."
-            }
-        ],
-        "faq": [
-            {"q": f"Is this legal in {post['country']}?",      "a": "It depends on your specific circumstances. LitigaForge AI can analyse your exact situation and give you a definitive answer in seconds."},
-            {"q": "What is the time limit to take action?",    "a": "Generally 1 to 3 years depending on the claim type. Acting sooner is always better as evidence is fresher."},
-            {"q": "Do I need a lawyer?",                       "a": "For straightforward cases, LitigaForge AI handles drafting and analysis. For complex disputes, we connect you with a verified advocate."},
-            {"q": "How much does it cost to take legal action?","a": "Costs vary. LitigaForge AI provides a free initial analysis so you know your options before spending anything."},
-        ],
-        "cta":          "Get your free AI legal analysis at litigaforge.com — results in 60 seconds.",
-        "tags":         [post["country"], "legal rights", "2026", "employment law", "LitigaForge"],
-        "internalLink": "Legal Notice Generator"
-    }
+    # No usable article: skip this topic rather than publish boilerplate.
+    raise ValueError(f"No valid article JSON from any model (last source: {source})")
 
 
 # ─── STEP 3: BUILD MARKDOWN ──────────────────────────────────────────────────
@@ -776,8 +783,8 @@ async def main():
     print("="*55)
 
     if not GEMINI_API_KEY and not GROQ_API_KEY:
-        print("❌ FATAL: Set GEMINI_API_KEY or GROQ_API_KEY in GitHub Secrets")
-        return
+        print("::error::Set GEMINI_API_KEY or GROQ_API_KEY in GitHub Secrets")
+        return 1
 
     published_slugs = load_published()
     print(f"📚 Already published: {len(published_slugs)} articles\n")
@@ -787,11 +794,12 @@ async def main():
     posts = await fetch_reddit_posts()
 
     if not posts:
-        print("No qualifying posts found this run.")
-        return
+        print("::warning::No fresh topics this run — add topics to _CURATED_TOPICS")
+        return 0
 
     # Step 2–5: Pipeline for top N posts
     published_count = 0
+    failures = 0
     for post in posts:
         if published_count >= MAX_ARTICLES:
             break
@@ -811,6 +819,7 @@ async def main():
             article = await generate_article(post)
         except Exception as e:
             print(f"  ✗ Article generation failed: {e}")
+            failures += 1
             continue
 
         slug = article.get("slug", "")
@@ -830,6 +839,10 @@ async def main():
         # Step 4: Push to GitHub
         print("\n🐙 Step 4: Pushing to GitHub...")
         github_ok = await push_to_github(slug, md)
+        if not github_ok:
+            print(f"::error::GitHub push failed for {slug} — not marking as published")
+            failures += 1
+            continue
 
         # Step 5: Submit to IndexNow
         print("\n🔗 Step 5: Submitting to IndexNow...")
@@ -847,10 +860,15 @@ async def main():
         if published_count < MAX_ARTICLES:
             await asyncio.sleep(5)
 
+    if published_count == 0 and failures:
+        print(f"::error::Nothing published: {failures} failure(s) this run")
+    elif published_count == 0:
+        print("::warning::Nothing published: no fresh topics left — add topics to _CURATED_TOPICS")
     print(f"\n{'='*55}")
     print(f"  Pipeline complete — {published_count} articles published")
     print(f"  Total published to date: {len(published_slugs)}")
     print("="*55 + "\n")
+    return 1 if (published_count == 0 and failures) else 0
 
 
 # Reddit is blocked in cloud/CI — patch fetch_reddit_posts to pass published_slugs
@@ -900,4 +918,4 @@ async def fetch_reddit_posts() -> list[dict]:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    raise SystemExit(asyncio.run(main()) or 0)

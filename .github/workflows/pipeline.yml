@@ -3,8 +3,8 @@ name: LitigaForge Content Pipeline
 # ─── TRIGGERS ────────────────────────────────────────────
 on:
   schedule:
-    # Runs every 2 hours — uses ~36 min/day of GitHub's 2,000 free minutes
-    - cron: '0 */2 * * *'
+    # Twice a day, one article per run: steady, reviewable output
+    - cron: '15 1,13 * * *'   # 06:45 and 18:45 IST, 1 article each
 
   # Manual trigger from GitHub Actions UI
   workflow_dispatch:
@@ -12,7 +12,7 @@ on:
       max_articles:
         description: 'Max articles to publish this run'
         required: false
-        default: '3'
+        default: '1'
 
 # ─── JOB ─────────────────────────────────────────────────
 jobs:
@@ -68,7 +68,7 @@ jobs:
           INDEXNOW_KEY:    ${{ secrets.INDEXNOW_KEY }}
           BLOG_DOMAIN:     ${{ secrets.BLOG_DOMAIN || 'blog.litigaforge.com' }}
           SCORE_THRESHOLD: "60"
-          MAX_ARTICLES:    ${{ github.event.inputs.max_articles || '3' }}
+          MAX_ARTICLES:    ${{ github.event.inputs.max_articles || '1' }}
         run: python pipeline.py
 
       # 6. Save updated published slugs
